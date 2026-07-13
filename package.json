@@ -1,0 +1,16 @@
+{
+  "name": "dynanic-hyperbolic-neural-graph",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Phase-state hyperbolic neural graph with replay — static, on-device, read-only to the LLM.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
+  },
+  "license": "MIT"
+}
