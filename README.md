@@ -12,16 +12,19 @@ it can never write an edge, edit a weight, or embed anything into it. That
 boundary is architectural, not a policy — the write path does not exist on
 the model's side. Full spec: [`docs/ATLAS_ENGINE_SPEC.md`](docs/ATLAS_ENGINE_SPEC.md).
 
-## What's built (v0.1 — the core + the temporal upgrade)
+## What's built (v0.2 — full geometry stack + the temporal upgrade)
 
 | module | what |
 |---|---|
 | `src/core/types.ts` | edge kinds + conductance + provenance set |
-| `src/core/hyper.ts` | Poincaré-ball geometry, deterministic encoder, Riemannian-SGD embedding (`hyperMap`) |
+| `src/core/hyper.ts` | Poincaré-ball geometry, deterministic encoder, Riemannian-SGD embedding (`hyperMap`) — DERIVATION depth |
 | `src/core/lorentz.ts` | the Lorentz/hyperboloid model — the stability seam for repeated updates (exact Poincaré↔Lorentz conversions, Minkowski distance, exp map) |
 | `src/core/temporal.ts` | temporal-coherent embedding — warm-start + birth-near-neighbors + local relaxation, so the graph *evolves* across replay steps instead of re-rolling each time |
+| `src/core/structure.ts` | the graph's own shape — Betti number b₁, cycle basis, homology class (graph-native recognition invariant), non-bridge/cycle edges, δ-hyperbolicity, curvature signature (what mix of hyperbolic/toroidal a graph actually calls for) |
+| `src/core/torus.ts` | flat-torus 𝕋⁸ phase mapping — RECURRENCE, the thing the ball cannot represent (it's simply connected). Winding numbers, φ-scale weighting, golden low-discrepancy placement, translation alignment, nobility (φ-vs-rational winding) |
+| `src/core/product.ts` | mixed-curvature ℍⁿ×𝕋ᵈ product space (Gu, Sala, Gunel & Ré, ICLR 2019) — combined distance, curvature-mix resolution, the disagreements between the two charts (same-rhythm/different-lineage vs. same-lineage/drifted-phase), and the exact winding-number recognition invariant vs. asymptotic metric return |
 
-15 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck`.
+63 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck`.
 
 ## Why temporal coherence, for this project specifically
 
@@ -43,14 +46,28 @@ A2.drift;      // { mean, max, moved } — motion of the stable interior
 A2.new_nodes;  // nodes born this replay step, seated near their neighbors
 ```
 
+## Why both charts, for this project specifically
+
+Depth (hyper.ts) and phase (torus.ts) answer different questions the
+recovery-rate work needs answered separately. Depth says how derived a
+state is from its source; phase says whether the graph is *recurring*
+(coming back around a regime) or *drifting* (novel each time). A stop-loss
+rule that only watched depth would fire on legitimate deep derivation; one
+that only watched phase would miss a state that keeps recurring at greater
+and greater remove from its origin. `disagreements()` is the direct readout
+for that: pairs that are close in phase but far in depth are the same
+rhythm recurring on a longer and longer lineage — exactly the shape a
+runaway (unbounded) recovery loop would take before either optimizer alone
+would flag it.
+
 ## Roadmap
 
 - **Recovery-rate regulating function, stop-loss, and the derived secondary
-  optimizations** described above — not yet built; `atlasDrift` is the
-  measurement primitive they'll sit on top of.
-- **Ported next:** `structure` (Betti/homology/curvature), `torus` (phase),
-  `product` (mixed-curvature + disagreements) — geometry cores already proven
-  in the source project, not yet lifted into this repo.
+  optimizations** described above — not yet built. `atlasDrift` (temporal.ts)
+  and `disagreements`/`recognitionInvariant` (product.ts) are the measurement
+  primitives they sit on top of: drift for decay rate, winding number for
+  exact recurrence detection, ball/torus disagreement for runaway-lineage
+  detection.
 - **Device host:** local graph store, the cartographer pipeline (replay
   events → edges → hygiene → atlas → publish), immutable versioned atlas.
 - **3D viewer with replay:** WebGL render of the hyperbolic-ball coordinates
