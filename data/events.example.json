@@ -1,0 +1,8 @@
+[
+  { "kind": "assoc", "src": "mem_001", "dst": "mem_002", "weight": 1, "ts": 1 },
+  { "kind": "assoc", "src": "mem_001", "dst": "mem_002", "weight": 1, "ts": 2 },
+  { "kind": "derived", "src": "mem_001", "dst": "mem_003", "weight": 1, "ts": 3 },
+  { "kind": "derived", "src": "mem_003", "dst": "mem_004", "weight": 1, "ts": 4 },
+  { "kind": "assoc", "src": "mem_004", "dst": "mem_002", "weight": 1, "ts": 5 },
+  { "kind": "session", "src": "mem_002", "dst": "mem_005", "weight": 0.8, "ts": 6 }
+]

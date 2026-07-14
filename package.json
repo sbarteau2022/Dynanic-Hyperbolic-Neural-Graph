@@ -6,11 +6,15 @@
   "description": "Phase-state hyperbolic neural graph with replay — static, on-device, read-only to the LLM.",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "publish-atlas": "tsx scripts/publish.ts",
+    "sync-events": "tsx scripts/sync-events.ts"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "tsx": "^4.23.1"
   },
   "license": "MIT"
 }

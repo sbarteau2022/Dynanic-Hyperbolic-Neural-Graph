@@ -60,18 +60,48 @@ rhythm recurring on a longer and longer lineage — exactly the shape a
 runaway (unbounded) recovery loop would take before either optimizer alone
 would flag it.
 
+## The recovery loop (built)
+
+`src/core/recovery.ts` is the layer the intent paragraph at the top of this
+README describes, sitting on the measurement primitives:
+
+- **`recoveryRate` / `recoveryTime`** — after a perturbation shoves the
+  frontier, drift decays geometrically back to the stable-interior baseline;
+  λ of that decay is the recovery rate, builds-until-rethreshold is the
+  recovery time. A still-growing series reads as a *negative* rate, not as
+  "nothing to measure".
+- **`regulate`** — the recovery-rate regulating function: recent drift
+  history → the next build's relax epochs and learning rate (high drift buys
+  a longer, gentler anneal; a quiet map gets a cheap incremental build).
+  The secondary optimization that falls out of the first as a byproduct.
+- **`stopLoss`** — three triggers, each a real failure mode: *reroll* (drift
+  past the bound — the build re-rolled the map, not evolved it), *diverging*
+  (drift rising across consecutive builds — compounding, not recovering),
+  and *runaway lineage* (a phase-close pair at ever-greater derivational
+  remove — the disagreement shape described above). A triggered stop-loss
+  keeps the snapshot locally and refuses the push: the device holds the
+  loss instead of propagating it to Elle.
+
+## The full device loop
+
+```sh
+npm run sync-events     # pull elle-worker's append-only co-recall ledger → data/events.json
+npm run publish-atlas   # events → regulated build → stop-loss gate → push snapshot to elle-worker
+```
+
+Both network calls are device-initiated (pull the ledger, push the snapshot);
+the worker never reaches into this machine, and the LLM can only read the
+result. `atlas/history.json` carries the drift series between runs so
+`regulate` and `stopLoss` see the dynamics, not just one build.
+
 ## Roadmap
 
-- **Recovery-rate regulating function, stop-loss, and the derived secondary
-  optimizations** described above — not yet built. `atlasDrift` (temporal.ts)
-  and `disagreements`/`recognitionInvariant` (product.ts) are the measurement
-  primitives they sit on top of: drift for decay rate, winding number for
-  exact recurrence detection, ball/torus disagreement for runaway-lineage
-  detection.
-- **Device host:** local graph store, the cartographer pipeline (replay
-  events → edges → hygiene → atlas → publish), immutable versioned atlas.
-- **3D viewer with replay:** WebGL render of the hyperbolic-ball coordinates
-  over time, read-only.
+- **3D viewer with replay:** the Elle workbench renders the latest snapshot
+  (read-only) today; replay across snapshot history — watching a memory
+  drift, split, or be absorbed over time — is the remaining piece.
+- **Feature/phase enrichment:** nodes currently carry no `nodeFeatures`/
+  `nodePhases` through the sync path, so torus placement is golden-lattice
+  for all real nodes until the device computes phases locally.
 
 ## References
 
