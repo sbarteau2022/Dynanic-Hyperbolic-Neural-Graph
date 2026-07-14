@@ -16,6 +16,7 @@
 
 import type { MemEdge } from './core/types';
 import { edgesFromEvents, type MemEvent } from './core/events';
+import { nodePhasesFromEvents } from './core/phases';
 import { hyperMap, type HyperNode, type HyperAtlas } from './core/hyper';
 import { temporalHyperMap, type TemporalAtlas } from './core/temporal';
 import { torusMap, type TorusNode, type TorusAtlas } from './core/torus';
@@ -32,7 +33,7 @@ export interface CartographerOpts {
   prior?: Record<string, number[]>;        // previous build's hyper points — warm-starts if given
   changedNodes?: string[];                 // nodes whose incident edges changed since `prior`
   nodeFeatures?: Record<string, number[]>; // optional raw feature vectors for cold node placement
-  nodePhases?: Record<string, number[]>;   // optional phase vectors for torus placement
+  nodePhases?: Record<string, number[]>;   // explicit phase vectors for torus placement — overrides the event-derived ones
 }
 
 export interface AtlasCore {
@@ -50,7 +51,11 @@ export function buildAtlas(events: MemEvent[], opts: CartographerOpts = {}): Atl
 
   const nodeIds = [...new Set(edges.flatMap((e) => [e.src, e.dst]))].sort();
   const hyperNodes: HyperNode[] = nodeIds.map((id) => ({ id, features: opts.nodeFeatures?.[id] }));
-  const torusNodes: TorusNode[] = nodeIds.map((id) => ({ id, phases: opts.nodePhases?.[id] }));
+  // Torus phases: explicit vectors win; otherwise each node's phase signature
+  // is read off its own recall-activity rhythm in the event log (phases.ts).
+  // Nodes without enough signal stay bare and take the golden-lattice seat.
+  const derivedPhases = opts.nodePhases ?? nodePhasesFromEvents(events);
+  const torusNodes: TorusNode[] = nodeIds.map((id) => ({ id, phases: derivedPhases[id] }));
 
   const hyperDim = opts.hyperDim ?? 3;
   const hyper = opts.prior
