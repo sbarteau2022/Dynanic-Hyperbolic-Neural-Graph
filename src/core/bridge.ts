@@ -140,4 +140,71 @@ export function bridgeEdges(
   };
 }
 
+// ── query-induced bridges (the deformation that actually folds) ───────────
+// `bridgeEdges` picks ONE global bridge set for the whole graph, which turns
+// out to be the wrong shape for the claim: a handful of global shortcuts only
+// helps the queries that happen to sit on their endpoints, and loses badly to
+// random rewiring, which shortens the diameter for everyone (see bench.ts).
+//
+// The deformation the architecture actually wants is INDUCED BY THE QUERY:
+// for this query, and only while it runs, fold the manifold so the nodes it
+// is geodesically near become adjacent to it. Every query gets its own
+// wormholes, anchored at its own source, and they vanish with the query.
+// Same ephemerality rule as above — returned, never written.
+
+export function queryBridges(
+  source: string,
+  hyperPoints: Record<string, number[]>,
+  edges: Edge[],
+  opts: BridgeOpts & { count?: number; diversify?: boolean; minSep?: number } = {},
+): BridgeEdge[] {
+  const count = Math.max(1, Math.min(32, Math.round(opts.count ?? 3)));
+  const minHops = Math.max(2, Math.round(opts.minHops ?? 3));
+  const minSep = Math.max(1, Math.round(opts.minSep ?? 3));
+  const torus = opts.torusPoints;
+  const mix = opts.mix ?? { hyperbolic: 1, toroidal: 1 };
+  if (!hyperPoints[source] || (torus && !torus[source])) return [];
+
+  const geoDist = (b: string) =>
+    torus
+      ? productDist({ ball: hyperPoints[source], torus: torus[source] }, { ball: hyperPoints[b], torus: torus[b] }, mix)
+      : poincareDist(hyperPoints[source], hyperPoints[b]);
+
+  const adj = adjacency(edges);
+  const hops = hopsFrom(adj, source);
+  const ids = Object.keys(hyperPoints).filter((id) => id !== source && (!torus || torus[id])).sort();
+  const unreachGain = ids.length + 1;
+
+  const ranked = ids
+    .map((id) => ({ id, geo: geoDist(id), h: hops.get(id) ?? -1 }))
+    .filter((c) => c.h === -1 || c.h >= minHops)
+    .sort((x, y) => x.geo - y.geo || (x.id < y.id ? -1 : 1));
+
+  // Nearest-first alone is REDUNDANT: the top-k manifold neighbours often sit
+  // in the same graph neighbourhood, so k bridges buy barely more reach than
+  // one. Measured against random scattering, that costs more recall than the
+  // precision gains (bench.ts). Diversifying fixes it — take the nearest
+  // candidate, then the nearest one at least `minSep` hops away from every
+  // endpoint already chosen, so the bridges land in distinct regions while
+  // staying manifold-near.
+  const chosen: typeof ranked = [];
+  if (opts.diversify) {
+    const blocked = new Map<string, number>();
+    for (const c of ranked) {
+      if (chosen.length >= count) break;
+      if ((blocked.get(c.id) ?? Infinity) < minSep) continue;
+      chosen.push(c);
+      const from = hopsFrom(adj, c.id);
+      for (const [n, d] of from) blocked.set(n, Math.min(blocked.get(n) ?? Infinity, d));
+    }
+  } else {
+    chosen.push(...ranked.slice(0, count));
+  }
+
+  return chosen.map((c) => ({
+    a: source, b: c.id, geo: round(c.geo, 4), hops: c.h,
+    gain: (c.h === -1 ? unreachGain : c.h) - 1,
+  }));
+}
+
 function round(x: number, p: number): number { const f = 10 ** p; return Math.round(x * f) / f; }

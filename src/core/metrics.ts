@@ -155,7 +155,7 @@ export interface TraversalComparison {
   delta: { coverage: number; effective_hops: number; expanded: number }; // bridged − baseline
 }
 
-function aggregate(runs: WalkMetrics[]): WalkMetrics {
+export function aggregateWalks(runs: WalkMetrics[]): WalkMetrics {
   const n = runs.length || 1;
   const reached = runs.reduce((a, r) => a + r.reached, 0);
   const targets = runs.reduce((a, r) => a + r.targets, 0);
@@ -177,8 +177,8 @@ export function compareTraversal(
   opts: { budget?: number } = {},
 ): TraversalComparison {
   const budget = opts.budget ?? 6;
-  const base = aggregate(queries.map((q) => evidenceWalk(edges, q.source, q.targets, { budget })));
-  const brid = aggregate(queries.map((q) => evidenceWalk(edges, q.source, q.targets, { budget, bridges })));
+  const base = aggregateWalks(queries.map((q) => evidenceWalk(edges, q.source, q.targets, { budget })));
+  const brid = aggregateWalks(queries.map((q) => evidenceWalk(edges, q.source, q.targets, { budget, bridges })));
   return {
     queries: queries.length,
     baseline: base,

@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "Phase-state hyperbolic neural graph with replay — static, on-device, read-only to the LLM.",
+  "description": "Phase-state hyperbolic neural graph with replay \u2014 static, on-device, read-only to the LLM.",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "publish-atlas": "tsx scripts/publish.ts",
-    "sync-events": "tsx scripts/sync-events.ts"
+    "sync-events": "tsx scripts/sync-events.ts",
+    "bench": "tsx scripts/bench.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
