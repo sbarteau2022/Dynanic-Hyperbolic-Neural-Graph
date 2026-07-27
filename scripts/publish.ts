@@ -21,6 +21,7 @@ import path from 'node:path';
 import { buildAtlas, type CartographerOpts } from '../src/cartographer';
 import { serializeAtlas, type AtlasSnapshot } from '../src/publish';
 import { regulate, stopLoss, recoveryRate, type BuildRecord } from '../src/core/recovery';
+import { bridgeReport } from '../src/core/metrics';
 import type { MemEvent } from '../src/core/events';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -71,7 +72,17 @@ async function main() {
   // The stop-loss: a bad build is kept locally but never propagates to Elle.
   const verdict = stopLoss({ driftSeries, disagreements: snapshot.product.disagreements as { same_rhythm_diff_lineage?: Array<{ a: string; b: string; ball: number; torus: number }> } });
 
+  // The measurement, on this build's real graph. Written beside the snapshot
+  // rather than into it: the snapshot's hash is a change-detector for the
+  // ATLAS, and folding a benchmark into it would make the hash move for
+  // reasons that have nothing to do with the map. The worker's ingest
+  // contract stays exactly as it was.
+  const report = bridgeReport(core.hyper.points, core.edges, {
+    torusPoints: core.torus.points, budget: 6, k: 4, maxQueries: 16,
+  });
+
   await mkdir(ATLAS_DIR, { recursive: true });
+  await writeFile(path.join(ATLAS_DIR, 'metrics.json'), JSON.stringify({ version, hash: snapshot.hash, report }, null, 2));
   await writeFile(path.join(ATLAS_DIR, `${snapshot.hash}.json`), JSON.stringify(snapshot, null, 2));
   await writeFile(path.join(ATLAS_DIR, 'latest.json'), JSON.stringify(snapshot, null, 2));
   await writeFile(path.join(ATLAS_DIR, 'history.json'), JSON.stringify(nextHistory, null, 2));
@@ -88,6 +99,12 @@ async function main() {
     relax: snapshot.temporal ? relax : undefined,
     recovery_rate: recoveryRate(driftSeries),
     stop_loss: verdict,
+    bridge: {
+      found: report.bridges.bridges.length,
+      coverage_delta: report.traversal.delta.coverage,
+      effective_hops_delta: report.traversal.delta.effective_hops,
+      contradiction_delta: report.contradictions.delta,
+    },
   };
   console.log(JSON.stringify(summary, null, 2));
 
