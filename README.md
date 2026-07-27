@@ -23,8 +23,10 @@ the model's side. Full spec: [`docs/ATLAS_ENGINE_SPEC.md`](docs/ATLAS_ENGINE_SPE
 | `src/core/structure.ts` | the graph's own shape — Betti number b₁, cycle basis, homology class (graph-native recognition invariant), non-bridge/cycle edges, δ-hyperbolicity, curvature signature (what mix of hyperbolic/toroidal a graph actually calls for) |
 | `src/core/torus.ts` | flat-torus 𝕋⁸ phase mapping — RECURRENCE, the thing the ball cannot represent (it's simply connected). Winding numbers, φ-scale weighting, golden low-discrepancy placement, translation alignment, nobility (φ-vs-rational winding) |
 | `src/core/product.ts` | mixed-curvature ℍⁿ×𝕋ᵈ product space (Gu, Sala, Gunel & Ré, ICLR 2019) — combined distance, curvature-mix resolution, the disagreements between the two charts (same-rhythm/different-lineage vs. same-lineage/drifted-phase), and the exact winding-number recognition invariant vs. asymptotic metric return |
+| `src/core/bridge.ts` | ephemeral wormhole edges — pairs proximal in the product manifold but many hops apart (or disconnected) on the raw graph, ranked by hops-saved per geodesic unit. Returned, never written: the graph "folds" for one query and relaxes after |
+| `src/core/metrics.ts` | the benchmark that makes the bridge a claim instead of a metaphor — evidence walk (BFS with hop budget + early stop), geometry-named evidence queries, baseline-vs-bridged comparison (coverage, effective hops, nodes expanded), contradiction-exposure rate, one-call `bridgeReport` |
 
-63 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck`.
+117 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck`.
 
 ## Why temporal coherence, for this project specifically
 
@@ -81,6 +83,47 @@ README describes, sitting on the measurement primitives:
   remove — the disagreement shape described above). A triggered stop-loss
   keeps the snapshot locally and refuses the push: the device holds the
   loss instead of propagating it to Elle.
+
+## The bridge, made measurable
+
+The "Einstein–Rosen bridge" intuition — don't expand node-by-node, deform the
+search space so structurally relevant regions become locally adjacent — is
+implemented and, more importantly, *scored*. `bridgeEdges` (bridge.ts) reads
+candidate wormholes off the atlas: pairs the ℍⁿ×𝕋ᵈ manifold puts close
+together that the raw topology puts ≥ 3 hops apart (or in different
+components), ranked by hops-saved per geodesic unit. They are the actionable
+form of product.ts's *same-rhythm/different-lineage* disagreement, and they
+are ephemeral by construction — returned to the caller, never written into
+the graph, so the manifold "folds" for one query and relaxes after. The
+read-only boundary holds.
+
+Whether folding buys anything is not asserted — it is measured. `bridgeReport`
+(metrics.ts) runs the same breadth-first evidence walk twice over the same
+graph, baseline vs. bridged, and reports the deltas on the axes that matter:
+
+- **evidence coverage** — fraction of the query's evidence set (its k
+  geodesically-nearest nodes — geometry names the evidence, so the walk is
+  judged on reaching what geometry named) inside the hop budget
+- **effective traversal length** — mean hops, with unreached targets charged
+  budget + 1 so a miss is a cost, not a silent drop
+- **compute** — nodes expanded before the walk could stop (the deterministic
+  stand-in for latency; there is no wall clock anywhere in this repo)
+- **contradiction exposure** — how often *both* sides of a `contradicts` pair
+  land inside one query's horizon, reached through independent evidence paths
+  (the tension edge itself doesn't count — hopping it from one side resolves
+  nothing)
+
+```ts
+const atlas = hyperMap([], edges);
+const report = bridgeReport(atlas.points, edges, { budget: 6, k: 4 });
+report.traversal.delta;      // { coverage, effective_hops, expanded } — bridged − baseline
+report.contradictions.delta; // exposure-rate gain
+```
+
+If the deltas are ~0 on a given graph, the honest reading is that the graph's
+topology already agrees with its geometry and the bridge has nothing to add
+there — the point of the instrument is that either outcome is a number, not
+an anecdote.
 
 ## The full device loop
 
