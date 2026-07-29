@@ -30,6 +30,8 @@ is the device engine and is runnable and testable entirely on its own.
 - [Project structure](#project-structure)
 - [The bridge, made measurable](#the-bridge-made-measurable)
 - [What the benchmark actually found](#what-the-benchmark-actually-found-npm-run-bench)
+- [Superposition: removing the topological veto](#superposition-removing-the-topological-veto)
+- [The recall gap was a budget artifact, not a trade-off](#the-recall-gap-was-a-budget-artifact-not-a-trade-off-npm-run-benchhybrid)
 - [Design decisions of record](#design-decisions-of-record)
 - [CI](#ci)
 - [Roadmap](#roadmap)
@@ -84,6 +86,13 @@ accumulating graph, without ever letting the model touch it:
   apart (or in different components). These are *never written into the
   graph*; they are returned to the caller for one query and discarded — the
   graph "folds" momentarily rather than being permanently rewired.
+- **Resonance** (`src/core/resonance.ts`) — a superposition alternative to
+  the product space's convex mix: the ball stays the structural baseline
+  (amplitude) and the torus modulates it (frequency), so phase agreement
+  folds hyperbolic distance instead of competing with it for a mix weight.
+  This is a query-time *routing score*, not a metric — it powers the default
+  scoring path for `queryBridges` (see below), while `productDist` remains
+  the metric of record.
 - **The recovery loop** (`src/core/recovery.ts`) — after a perturbation,
   drift is expected to decay back toward baseline. `recoveryRate` /
   `recoveryTime` measure that decay, `regulate` uses recent drift history to
@@ -94,7 +103,7 @@ accumulating graph, without ever letting the model touch it:
 
 ## What's built
 
-130 tests, deterministic, zero runtime dependencies (`npm install && npm
+157 tests, deterministic, zero runtime dependencies (`npm install && npm
 test`).
 
 | module | what |
@@ -109,6 +118,7 @@ test`).
 | `src/core/bridge.ts` | ephemeral wormhole edges — pairs proximal in the product manifold but many hops apart on the raw graph, ranked by hops-saved per geodesic unit |
 | `src/core/metrics.ts` | the bridge benchmark — evidence walk (BFS with hop budget + early stop), baseline-vs-bridged comparison (coverage, effective hops, nodes expanded), contradiction-exposure rate, one-call `bridgeReport` |
 | `src/core/bench.ts` | the controlled experiment — synthetic corpora with planted topics the embedding never sees, ground-truth recall queries, and control arms (random shortcuts, hub shortcuts, a phase-permutation null) |
+| `src/core/resonance.ts` | **superposition instead of mixture** — phase agreement modulates hyperbolic distance (`d_ℍ · f(r)`) rather than being averaged against it, so a hierarchical graph can keep its depth embedding *and* still route semantically. A routing score, explicitly not a metric |
 | `src/core/events.ts` | folds an append-only event log into edges (φ⁻ⁿ-weighted repeat-occurrence hygiene, capped, order-independent) |
 | `src/core/phases.ts` | reads each node's torus phase signature off its own recall-activity timestamps |
 | `src/core/recovery.ts` | `recoveryRate`, `recoveryTime`, `regulate`, `stopLoss` |
@@ -146,17 +156,18 @@ npm install
 ## Usage
 
 ```sh
-npm test         # vitest run — 130 tests
-npm run typecheck # tsc --noEmit against both tsconfig files
-npm run bench     # the controlled bridge-vs-controls experiment (see below)
+npm test           # vitest run — 157 tests
+npm run typecheck  # tsc --noEmit against both tsconfig files
+npm run bench      # the controlled bridge-vs-controls experiment (see below)
+npm run bench:hybrid # the exploration/exploitation budget sweep (see below)
 ```
 
 ### The full device loop
 
 The two remaining scripts talk to a companion `elle-worker` deployment over
 HTTP and are not required to develop or test this repo in isolation — `npm
-test`, `npm run typecheck`, and `npm run bench` need no network access or
-environment variables at all.
+test`, `npm run typecheck`, `npm run bench`, and `npm run bench:hybrid` need
+no network access or environment variables at all.
 
 ```sh
 export ATLAS_PULL_URL=https://<your-elle-worker-deployment>   # or ATLAS_PUSH_URL for both directions
@@ -201,6 +212,7 @@ npm run publish-atlas   # events → regulated build → stop-loss gate → push
 │   └── events.example.json       # sample MemEvent[] for local publish-atlas runs
 ├── scripts/
 │   ├── bench.ts                  # CLI: prints the controlled-experiment tables (npm run bench)
+│   ├── hybrid.ts                 # CLI: resonance/random budget sweep (npm run bench:hybrid)
 │   ├── publish.ts                # CLI: events → atlas → stop-loss gate → push (npm run publish-atlas)
 │   └── sync-events.ts            # CLI: pull elle-worker's event ledger (npm run sync-events)
 ├── src/
@@ -217,6 +229,7 @@ npm run publish-atlas   # events → regulated build → stop-loss gate → push
 │       ├── bridge.ts             # wormhole/bridge edge candidates
 │       ├── metrics.ts            # bridgeReport — the baseline-vs-bridged benchmark
 │       ├── bench.ts              # synthetic corpora + control arms for scripts/bench.ts
+│       ├── resonance.ts          # superposition routing score — phase modulates hyperbolic distance
 │       ├── events.ts             # event log → edges
 │       ├── phases.ts             # event log → per-node torus phase signature
 │       └── recovery.ts           # recoveryRate, recoveryTime, regulate, stopLoss
@@ -303,6 +316,141 @@ ground truth exists at all. They establish that the mechanism works and
 beats simpler alternatives on one axis; they do not establish that real
 recall ledgers have this structure. Running the same harness against a
 real event log is the next measurement, not a settled result.
+
+## Superposition: removing the topological veto
+
+The second finding above — that the topology-derived mix suppresses the phase
+chart — turned out to be worse than "suppresses" on measurement. A star
+corpus is a **forest**, so `curvatureSignature` computes toroidal pull
+b₁/(b₁+C) = 0 **exactly**. The mix comes out `{hyperbolic: 1, toroidal: 0}`
+and the torus contributes **0.0%** of the distance. The 2/8 on-topic result
+was not a weak signal; it was chance, because the chart carrying cross-lineage
+kinship had been switched off precisely where hierarchy makes it the only
+thing worth knowing.
+
+The cause is that a convex mix is zero-sum: the two charts compete for one
+scalar, so a structural prior can veto a semantic one. `src/core/resonance.ts`
+removes the competition by making the charts a **superposition** rather than a
+mixture — the ball is amplitude, the torus is frequency, and phase agreement
+*modulates* hyperbolic distance instead of being averaged against it:
+
+```
+D(a,b) = d_ℍ(a,b) · f(r(a,b))        r = φ-weighted mean cos(Δθ) ∈ [−1,1]
+f(r)   = max(floor, 1 − gain · max(0,r)^sharpness)
+```
+
+Resonant pairs pinch together wherever they sit on the tree; clashing pairs
+keep their true topological distance. There is no weight to infer, so the veto
+is structurally impossible. Three deliberate properties, each pinned by a test:
+
+- **One-sided.** Only agreement pulls. Unrelated pairs sit at r ≈ 0 by
+  construction, so f(0) must be exactly 1 — a two-sided gate (e.g.
+  `exp(−κ(1+r)/2)`) shrinks *every* pair at r = 0, which is a global rescale
+  wearing a fold's clothing.
+- **Sharpened.** Random phase vectors carry non-zero |r| by chance; the
+  exponent means only strong agreement earns a fold.
+- **Floored.** Without a floor a spuriously resonant pair lands at distance
+  ≈ 0 regardless of true separation, and the deformation is unbounded.
+
+Same benchmark, resonance added as an arm (per-query, diversified):
+
+| topology | arm | recall | eff. hops | on-topic |
+|---|---|---|---|---|
+| star | geometry (balanced mix) | 0.657 | 3.10 | 58/72 |
+| star | **resonance** | 0.648 | **2.94** | **71/72** |
+| star | random / hub | 0.667 / 0.611 | 3.42 / 3.60 | — |
+| ring | geometry (balanced mix) | 0.588 | 3.14 | 63/72 |
+| ring | **resonance** | 0.611 | **3.01** | **72/72** |
+| ring | random / hub | 0.639 / 0.560 | 3.47 / 3.67 | — |
+| star | resonance, phase-permuted (null) | 0.699 | 3.34 | 18/72 |
+| ring | resonance, phase-permuted (null) | 0.643 | 3.37 | 23/72 |
+
+Bridge precision goes to **71/72 and 72/72** — essentially every wormhole it
+opens joins a genuine topic-mate — collapsing to 18–23/72 under the
+permutation null. Effective hops become the best of any arm on both
+topologies, and on the topology-aligned corpus resonance reaches full recall
+while expanding roughly *half* the nodes of any other arm (154–174 vs
+297–405). Crucially it does this with **no mix inference at all**, so star and
+ring are treated identically.
+
+At this 3-edge budget resonance still trails random scattering on raw recall
+(0.648 vs 0.667; 0.611 vs 0.639) — which looked, across three iterations, like
+a structural precision/breadth trade-off. **It is not.** See the next section.
+
+**`resonantDist` is not a metric, and must not be described as one.**
+Multiplying a distance by a pairwise gate breaks the triangle inequality — if
+a resonates with b and b with c while a clashes with c, D(a,c) can exceed
+D(a,b) + D(b,c). There is a test that asserts exactly this failure. That is
+acceptable, arguably the point, for a query-time routing score that decides
+which wormholes to open, and disqualifying for a geometry. `productDist`
+remains the metric (Gu et al.); resonance sits beside it as a second
+instrument, and `scoring: 'product'` is still the default everywhere.
+
+## The recall gap was a budget artifact, not a trade-off (`npm run bench:hybrid`)
+
+The recall deficit survived global bridges, query-induced bridges, and
+superposition scoring, which made it look like a structural invariant — a
+genuine exploration/exploitation split, with resonance doing *semantic
+tunneling* and random shortcuts doing *topological expansion*. The obvious
+architecture would then be a hybrid: spend most of the budget on resonance and
+a little on random shortcuts to recover breadth.
+
+That hypothesis was tested by holding the per-query edge budget fixed and
+sweeping the allocation. **It is refuted.** Every random edge added at a
+6-edge budget costs *both* recall and hops, monotonically, on both topologies:
+
+| split (B=6, ring) | recall | eff. hops | resonance precision |
+|---|---|---|---|
+| 6 res + 0 rand | **0.889** | **1.73** | 94% |
+| 5 res + 1 rand | 0.843 | 1.92 | 100% |
+| 3 res + 3 rand | 0.824 | 2.36 | 100% |
+| 0 res + 6 rand | 0.796 | 2.85 | — |
+
+The Pareto frontier is a single point at 0% random. The reason shows up in a
+budget sweep of pure resonance against pure random:
+
+| bridges/query | resonance recall / hops | random recall / hops | recall winner |
+|---|---|---|---|
+| 2 | 0.486 / 3.55 | 0.556 / 3.78 | random |
+| 3 | 0.611 / 3.01 | 0.639 / 3.47 | random |
+| **4** | **0.736 / 2.46** | 0.713 / 3.27 | **resonance** |
+| 6 | 0.889 / 1.73 | 0.796 / 2.85 | resonance |
+| 10 | 0.991 / 1.19 | 0.912 / 2.23 | resonance |
+
+(ring; star crosses at the same budget and is within 0.02 throughout)
+
+The crossover is at **4 bridges per query, identical on both topologies**, and
+past it the advantage *widens* rather than saturating. Below the crossover,
+three bridges can only reach three of a topic's ~11 members directly, so
+scattering picks up more by luck; above it, diversified resonance covers the
+class directly and luck stops competing. Resonance wins effective hops at
+*every* budget, including the ones where it loses recall — the two axes were
+never actually coupled.
+
+**The architectural conclusion is the opposite of a hybrid: don't spend the
+budget on exploration, spend a large enough budget.** Mixing in random
+shortcuts is strictly dominated at any budget where the method is worth using
+at all.
+
+`queryBridges` therefore **defaults to 6 bridges per query** — set from this
+crossover, not from taste: clear of the inversion at 4, with headroom, and at
+the point where the allocation sweep's Pareto frontier collapses to a single
+all-resonance point. The benchmark tables above deliberately stay at 3, one
+edge *below* the crossover, because that is the setting most favourable to the
+controls: the shipped configuration should not be the one the comparison is
+run at.
+
+One honest note on the null: inside a hybrid, recall is unchanged when phases
+are shuffled (0.866 signal vs 0.866 null on star) while hops degrade
+(1.91 → 2.65) and precision collapses (99% → 26%). Recall breadth is bought by
+adding edges, whatever they are; depth and precision are what the signal buys.
+
+Caveat worth stating plainly: these are synthetic corpora with a planted
+signal, chosen so ground truth exists at all. They establish that the
+mechanism works and that it beats simpler alternatives on one axis; they do
+not establish that real recall ledgers have this structure. Running the same
+harness against a real event log is the next measurement, not a settled
+result.
 
 ## Design decisions of record
 
