@@ -26,8 +26,9 @@ the model's side. Full spec: [`docs/ATLAS_ENGINE_SPEC.md`](docs/ATLAS_ENGINE_SPE
 | `src/core/bridge.ts` | ephemeral wormhole edges — pairs proximal in the product manifold but many hops apart (or disconnected) on the raw graph, ranked by hops-saved per geodesic unit. Returned, never written: the graph "folds" for one query and relaxes after |
 | `src/core/metrics.ts` | the benchmark that makes the bridge a claim instead of a metaphor — evidence walk (BFS with hop budget + early stop), geometry-named evidence queries, baseline-vs-bridged comparison (coverage, effective hops, nodes expanded), contradiction-exposure rate, one-call `bridgeReport` |
 | `src/core/bench.ts` | the **controlled experiment** — synthetic corpora with planted topics the embedding never sees, ground-truth recall queries, and the control arms (random shortcuts, hub shortcuts, and a phase-permutation null) the geometry has to beat |
+| `src/core/resonance.ts` | **superposition instead of mixture** — phase agreement modulates hyperbolic distance (`d_ℍ · f(r)`) rather than being averaged against it, so a hierarchical graph can keep its depth embedding *and* still route semantically. A routing score, explicitly not a metric |
 
-130 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck` / `npm run bench`.
+155 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck` / `npm run bench` / `npm run bench:hybrid`.
 
 ## Why temporal coherence, for this project specifically
 
@@ -180,6 +181,126 @@ Two design decisions came directly out of running this, not out of taste:
   ball cannot see cross-lineage kinship — on-topic bridges drop from 8/8 to
   2/8 on the star corpus. A mix inferred from topology alone is the wrong
   prior when the phase chart is carrying the information.
+
+## Superposition: removing the topological veto
+
+The second finding above — that the topology-derived mix suppresses the phase
+chart — turned out to be worse than "suppresses" on measurement. A star
+corpus is a **forest**, so `curvatureSignature` computes toroidal pull
+b₁/(b₁+C) = 0 **exactly**. The mix comes out `{hyperbolic: 1, toroidal: 0}`
+and the torus contributes **0.0%** of the distance. The 2/8 on-topic result
+was not a weak signal; it was chance, because the chart carrying cross-lineage
+kinship had been switched off precisely where hierarchy makes it the only
+thing worth knowing.
+
+The cause is that a convex mix is zero-sum: the two charts compete for one
+scalar, so a structural prior can veto a semantic one. `src/core/resonance.ts`
+removes the competition by making the charts a **superposition** rather than a
+mixture — the ball is amplitude, the torus is frequency, and phase agreement
+*modulates* hyperbolic distance instead of being averaged against it:
+
+```
+D(a,b) = d_ℍ(a,b) · f(r(a,b))        r = φ-weighted mean cos(Δθ) ∈ [−1,1]
+f(r)   = max(floor, 1 − gain · max(0,r)^sharpness)
+```
+
+Resonant pairs pinch together wherever they sit on the tree; clashing pairs
+keep their true topological distance. There is no weight to infer, so the veto
+is structurally impossible. Three deliberate properties, each pinned by a test:
+
+- **One-sided.** Only agreement pulls. Unrelated pairs sit at r ≈ 0 by
+  construction, so f(0) must be exactly 1 — a two-sided gate (e.g.
+  `exp(−κ(1+r)/2)`) shrinks *every* pair at r = 0, which is a global rescale
+  wearing a fold's clothing.
+- **Sharpened.** Random phase vectors carry non-zero |r| by chance; the
+  exponent means only strong agreement earns a fold.
+- **Floored.** Without a floor a spuriously resonant pair lands at distance
+  ≈ 0 regardless of true separation, and the deformation is unbounded.
+
+Same benchmark, resonance added as an arm (per-query, diversified):
+
+| topology | arm | recall | eff. hops | on-topic |
+|---|---|---|---|---|
+| star | geometry (balanced mix) | 0.657 | 3.10 | 58/72 |
+| star | **resonance** | 0.648 | **2.94** | **71/72** |
+| star | random / hub | 0.667 / 0.611 | 3.42 / 3.60 | — |
+| ring | geometry (balanced mix) | 0.588 | 3.14 | 63/72 |
+| ring | **resonance** | 0.611 | **3.01** | **72/72** |
+| ring | random / hub | 0.639 / 0.560 | 3.47 / 3.67 | — |
+| star | resonance, phase-permuted (null) | 0.699 | 3.34 | 18/72 |
+| ring | resonance, phase-permuted (null) | 0.643 | 3.37 | 23/72 |
+
+Bridge precision goes to **71/72 and 72/72** — essentially every wormhole it
+opens joins a genuine topic-mate — collapsing to 18–23/72 under the
+permutation null. Effective hops become the best of any arm on both
+topologies, and on the topology-aligned corpus resonance reaches full recall
+while expanding roughly *half* the nodes of any other arm (154–174 vs
+297–405). Crucially it does this with **no mix inference at all**, so star and
+ring are treated identically.
+
+At this 3-edge budget resonance still trails random scattering on raw recall
+(0.648 vs 0.667; 0.611 vs 0.639) — which looked, across three iterations, like
+a structural precision/breadth trade-off. **It is not.** See the next section.
+
+**`resonantDist` is not a metric, and must not be described as one.**
+Multiplying a distance by a pairwise gate breaks the triangle inequality — if
+a resonates with b and b with c while a clashes with c, D(a,c) can exceed
+D(a,b) + D(b,c). There is a test that asserts exactly this failure. That is
+acceptable, arguably the point, for a query-time routing score that decides
+which wormholes to open, and disqualifying for a geometry. `productDist`
+remains the metric (Gu et al.); resonance sits beside it as a second
+instrument, and `scoring: 'product'` is still the default everywhere.
+
+## The recall gap was a budget artifact, not a trade-off (`npm run bench:hybrid`)
+
+The recall deficit survived global bridges, query-induced bridges, and
+superposition scoring, which made it look like a structural invariant — a
+genuine exploration/exploitation split, with resonance doing *semantic
+tunneling* and random shortcuts doing *topological expansion*. The obvious
+architecture would then be a hybrid: spend most of the budget on resonance and
+a little on random shortcuts to recover breadth.
+
+That hypothesis was tested by holding the per-query edge budget fixed and
+sweeping the allocation. **It is refuted.** Every random edge added at a
+6-edge budget costs *both* recall and hops, monotonically, on both topologies:
+
+| split (B=6, ring) | recall | eff. hops | resonance precision |
+|---|---|---|---|
+| 6 res + 0 rand | **0.889** | **1.73** | 94% |
+| 5 res + 1 rand | 0.843 | 1.92 | 100% |
+| 3 res + 3 rand | 0.824 | 2.36 | 100% |
+| 0 res + 6 rand | 0.796 | 2.85 | — |
+
+The Pareto frontier is a single point at 0% random. The reason shows up in a
+budget sweep of pure resonance against pure random:
+
+| bridges/query | resonance recall / hops | random recall / hops | recall winner |
+|---|---|---|---|
+| 2 | 0.486 / 3.55 | 0.556 / 3.78 | random |
+| 3 | 0.611 / 3.01 | 0.639 / 3.47 | random |
+| **4** | **0.736 / 2.46** | 0.713 / 3.27 | **resonance** |
+| 6 | 0.889 / 1.73 | 0.796 / 2.85 | resonance |
+| 10 | 0.991 / 1.19 | 0.912 / 2.23 | resonance |
+
+(ring; star crosses at the same budget and is within 0.02 throughout)
+
+The crossover is at **4 bridges per query, identical on both topologies**, and
+past it the advantage *widens* rather than saturating. Below the crossover,
+three bridges can only reach three of a topic's ~11 members directly, so
+scattering picks up more by luck; above it, diversified resonance covers the
+class directly and luck stops competing. Resonance wins effective hops at
+*every* budget, including the ones where it loses recall — the two axes were
+never actually coupled.
+
+**The architectural conclusion is the opposite of a hybrid: don't spend the
+budget on exploration, spend a large enough budget.** Mixing in random
+shortcuts is strictly dominated at any budget where the method is worth using
+at all.
+
+One honest note on the null: inside a hybrid, recall is unchanged when phases
+are shuffled (0.866 signal vs 0.866 null on star) while hops degrade
+(1.91 → 2.65) and precision collapses (99% → 26%). Recall breadth is bought by
+adding edges, whatever they are; depth and precision are what the signal buys.
 
 Caveat worth stating plainly: these are synthetic corpora with a planted
 signal, chosen so ground truth exists at all. They establish that the
