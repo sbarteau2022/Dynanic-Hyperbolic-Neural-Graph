@@ -87,7 +87,7 @@ function main() {
         bs.filter((b) => f.corpus.topics[b.a] === f.corpus.topics[b.b]).length;
 
       // ── main table: per-query scope, balanced mix ──────────────────────
-      let geoHit = 0, geoTot = 0, divHit = 0, divTot = 0;
+      let geoHit = 0, geoTot = 0, divHit = 0, divTot = 0, resHit = 0, resTot = 0;
       const arms = runArmsPerQuery(f.edges, queries, {
         geometry: (s) => {
           const bs = queryBridges(s, f.hyper, f.edges, {
@@ -104,6 +104,14 @@ function main() {
           divTot += bs.length; divHit += onTopic(bs);
           return bs;
         },
+        resonance: (s) => {
+          const bs = queryBridges(s, f.hyper, f.edges, {
+            torusPoints: f.torus, scoring: 'resonance', count: PER_QUERY, minHops: 3,
+            diversify: true, minSep: 3,
+          }).map((b) => ({ a: b.a, b: b.b }));
+          resTot += bs.length; resHit += onTopic(bs);
+          return bs;
+        },
         random: (s) => randomQueryBridges(s, f.corpus.nodes, f.edges, PER_QUERY, 7),
         hub: (s) => hubQueryBridges(s, f.edges, PER_QUERY),
       }, { budget: BUDGET });
@@ -115,7 +123,8 @@ function main() {
           eff_hops: arm.metrics.effective_hops.toFixed(2),
           expanded: arm.metrics.expanded,
           on_topic: arm.name === 'geometry' ? `${geoHit}/${geoTot}`
-            : arm.name === 'geometry+div' ? `${divHit}/${divTot}` : '—',
+            : arm.name === 'geometry+div' ? `${divHit}/${divTot}`
+            : arm.name === 'resonance' ? `${resHit}/${resTot}` : '—',
         });
       }
 

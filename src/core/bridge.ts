@@ -24,13 +24,20 @@
 
 import { poincareDist } from './hyper';
 import { productDist, type Mix } from './product';
+import { resonantDist, foldFactor, type ResonantOpts } from './resonance';
 import type { Edge } from './structure';
 
 // A candidate wormhole: geodesically near (geo), topologically far (hops;
 // -1 = the endpoints are in different components — no finite path at all).
 // gain = graph hops the bridge removes (disconnected pairs use the node
 // count as the finite stand-in, an upper bound on any simple path).
-export interface BridgeEdge { a: string; b: string; geo: number; hops: number; gain: number }
+export interface BridgeEdge {
+  a: string; b: string; geo: number; hops: number; gain: number;
+  // How far this pair folded under resonance scoring: 1 = untouched,
+  // approaching 0 = fully collapsed. Present only when scoring is
+  // 'resonance', so a fold is inspectable rather than implicit.
+  fold?: number;
+}
 
 export interface BridgeSet {
   bridges: BridgeEdge[];
@@ -41,6 +48,15 @@ export interface BridgeSet {
 export interface BridgeOpts {
   torusPoints?: Record<string, number[]>; // present → product-space distance; absent → ball only
   mix?: Mix;             // curvature mix for the product distance (resolveMix output)
+  // How manifold proximity is scored. `product` is the metric (Gu et al.)
+  // weighted by `mix` — and on a forest that mix zeroes the torus outright,
+  // so the phase chart is silenced exactly where it is most needed.
+  // `resonance` drops the mix entirely and lets phase agreement modulate
+  // hyperbolic distance instead (resonance.ts): no weight to infer, no
+  // topological veto. Not a metric — a routing score. Default `product`,
+  // so existing callers are unaffected.
+  scoring?: 'product' | 'resonance';
+  resonance?: ResonantOpts;   // gain / sharpness / floor / transposed
   quantile?: number;     // geo-closeness cut: keep pairs in the closest q of all pair distances (default 0.2)
   minHops?: number;      // topological farness cut: bridge only pairs ≥ this many hops apart (default 3)
   maxBridges?: number;   // size of the returned set (default 8)
@@ -75,6 +91,38 @@ function hopsFrom(adj: Map<string, string[]>, source: string): Map<string, numbe
   return dist;
 }
 
+// One scorer for both entry points, so the global and per-query paths can
+// never drift apart on how proximity is defined.
+function makeGeoDist(
+  hyperPoints: Record<string, number[]>,
+  torus: Record<string, number[]> | undefined,
+  mix: Mix,
+  opts: BridgeOpts,
+): (a: string, b: string) => number {
+  if (!torus) return (a, b) => poincareDist(hyperPoints[a], hyperPoints[b]);
+  if (opts.scoring === 'resonance') {
+    return (a, b) => resonantDist(
+      { ball: hyperPoints[a], torus: torus[a] },
+      { ball: hyperPoints[b], torus: torus[b] },
+      opts.resonance ?? {},
+    );
+  }
+  return (a, b) => productDist(
+    { ball: hyperPoints[a], torus: torus[a] },
+    { ball: hyperPoints[b], torus: torus[b] },
+    mix,
+  );
+}
+
+// The fold a pair underwent, when resonance scoring is in play.
+function makeFold(
+  torus: Record<string, number[]> | undefined,
+  opts: BridgeOpts,
+): ((a: string, b: string) => number | undefined) {
+  if (!torus || opts.scoring !== 'resonance') return () => undefined;
+  return (a, b) => foldFactor(torus[a], torus[b], opts.resonance ?? {});
+}
+
 // ── the bridge set ─────────────────────────────────────────────────────────
 
 export function bridgeEdges(
@@ -96,10 +144,8 @@ export function bridgeEdges(
     .slice(0, maxNodes);
   if (ids.length < 2) return { bridges: [], threshold: 0, considered: 0 };
 
-  const geoDist = (a: string, b: string) =>
-    torus
-      ? productDist({ ball: hyperPoints[a], torus: torus[a] }, { ball: hyperPoints[b], torus: torus[b] }, mix)
-      : poincareDist(hyperPoints[a], hyperPoints[b]);
+  const geoDist = makeGeoDist(hyperPoints, torus, mix, opts);
+  const fold = makeFold(torus, opts);
 
   const adj = adjacency(edges);
   const hops = new Map<string, Map<string, number>>();
@@ -134,7 +180,9 @@ export function bridgeEdges(
   });
 
   return {
-    bridges: candidates.slice(0, maxBridges).map((c) => ({ a: c.a, b: c.b, geo: round(c.geo, 4), hops: c.hops, gain: c.gain })),
+    bridges: candidates.slice(0, maxBridges).map((c) => stripUndef({
+      a: c.a, b: c.b, geo: round(c.geo, 4), hops: c.hops, gain: c.gain, fold: fold(c.a, c.b),
+    })),
     threshold: round(threshold, 4),
     considered: pairs.length,
   };
@@ -165,10 +213,9 @@ export function queryBridges(
   const mix = opts.mix ?? { hyperbolic: 1, toroidal: 1 };
   if (!hyperPoints[source] || (torus && !torus[source])) return [];
 
-  const geoDist = (b: string) =>
-    torus
-      ? productDist({ ball: hyperPoints[source], torus: torus[source] }, { ball: hyperPoints[b], torus: torus[b] }, mix)
-      : poincareDist(hyperPoints[source], hyperPoints[b]);
+  const pairDist = makeGeoDist(hyperPoints, torus, mix, opts);
+  const geoDist = (b: string) => pairDist(source, b);
+  const fold = makeFold(torus, opts);
 
   const adj = adjacency(edges);
   const hops = hopsFrom(adj, source);
@@ -201,10 +248,18 @@ export function queryBridges(
     chosen.push(...ranked.slice(0, count));
   }
 
-  return chosen.map((c) => ({
+  return chosen.map((c) => stripUndef({
     a: source, b: c.id, geo: round(c.geo, 4), hops: c.h,
     gain: (c.h === -1 ? unreachGain : c.h) - 1,
+    fold: fold(source, c.id),
   }));
+}
+
+// Keep `fold` off the object entirely under product scoring, so the existing
+// serialized shape (and the atlas hash built over it) is unchanged.
+function stripUndef(e: BridgeEdge): BridgeEdge {
+  if (e.fold === undefined) { const { fold, ...rest } = e; return rest; }
+  return e;
 }
 
 function round(x: number, p: number): number { const f = 10 ** p; return Math.round(x * f) / f; }
