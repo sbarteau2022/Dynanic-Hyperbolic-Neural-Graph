@@ -91,14 +91,14 @@ function main() {
       const arms = runArmsPerQuery(f.edges, queries, {
         geometry: (s) => {
           const bs = queryBridges(s, f.hyper, f.edges, {
-            torusPoints: f.torus, mix: f.mixes.balanced, count: PER_QUERY, minHops: 3,
+            torusPoints: f.torus, scoring: 'product', mix: f.mixes.balanced, count: PER_QUERY, minHops: 3,
           }).map((b) => ({ a: b.a, b: b.b }));
           geoTot += bs.length; geoHit += onTopic(bs);
           return bs;
         },
         'geometry+div': (s) => {
           const bs = queryBridges(s, f.hyper, f.edges, {
-            torusPoints: f.torus, mix: f.mixes.balanced, count: PER_QUERY, minHops: 3,
+            torusPoints: f.torus, scoring: 'product', mix: f.mixes.balanced, count: PER_QUERY, minHops: 3,
             diversify: true, minSep: 3,
           }).map((b) => ({ a: b.a, b: b.b }));
           divTot += bs.length; divHit += onTopic(bs);
@@ -133,7 +133,7 @@ function main() {
       for (const mixName of ['graph', 'balanced']) {
         const mix = f.mixes[mixName];
         const global = bridgeEdges(f.hyper, f.edges, {
-          torusPoints: f.torus, mix, maxBridges: NGLOBAL, quantile: 0.2, minHops: 3,
+          torusPoints: f.torus, scoring: 'product', mix, maxBridges: NGLOBAL, quantile: 0.2, minHops: 3,
         }).bridges.map((b) => ({ a: b.a, b: b.b }));
         const g = runArms(f.edges, queries, { geometry: global }, { budget: BUDGET });
         ablation.push({
@@ -147,7 +147,7 @@ function main() {
         const pq = runArmsPerQuery(f.edges, queries, {
           geometry: (s) => {
             const bs = queryBridges(s, f.hyper, f.edges, {
-              torusPoints: f.torus, mix, count: PER_QUERY, minHops: 3,
+              torusPoints: f.torus, scoring: 'product', mix, count: PER_QUERY, minHops: 3,
             }).map((b) => ({ a: b.a, b: b.b }));
             tot += bs.length; hit += onTopic(bs);
             return bs;

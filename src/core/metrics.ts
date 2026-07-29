@@ -29,7 +29,7 @@ import { poincareDist } from './hyper';
 import { productDist, resolveMix, type Mix } from './product';
 import { asEdges, type Edge } from './structure';
 import type { MemEdge } from './types';
-import { bridgeEdges, type BridgeEdge, type BridgeSet, type BridgeOpts } from './bridge';
+import { queryBridges, type BridgeEdge, type BridgeOpts } from './bridge';
 
 // ── the walk (shared by baseline and bridged runs) ─────────────────────────
 
@@ -191,6 +191,38 @@ export function compareTraversal(
   };
 }
 
+// The per-query form — the shipped path. `bridgeEdges` picks ONE global set
+// for the whole graph, which the benchmark showed is the wrong shape: a
+// handful of global shortcuts only helps queries sitting on their endpoints.
+// Real traversal induces its own wormholes per query, so the report has to
+// measure that, not the superseded global variant.
+export function compareTraversalPerQuery(
+  edges: Edge[],
+  queries: EvidenceQuery[],
+  bridgeFor: (source: string) => Array<{ a: string; b: string }>,
+  opts: { budget?: number } = {},
+): TraversalComparison & { edges_spent: number } {
+  const budget = opts.budget ?? 6;
+  let spent = 0;
+  const base = aggregateWalks(queries.map((q) => evidenceWalk(edges, q.source, q.targets, { budget })));
+  const brid = aggregateWalks(queries.map((q) => {
+    const bridges = bridgeFor(q.source);
+    spent += bridges.length;
+    return evidenceWalk(edges, q.source, q.targets, { budget, bridges });
+  }));
+  return {
+    queries: queries.length,
+    baseline: base,
+    bridged: brid,
+    delta: {
+      coverage: round(brid.coverage - base.coverage, 4),
+      effective_hops: round(brid.effective_hops - base.effective_hops, 4),
+      expanded: brid.expanded - base.expanded,
+    },
+    edges_spent: spent,
+  };
+}
+
 // ── contradiction exposure ─────────────────────────────────────────────────
 // A `contradicts` pair is EXPOSED for a query when both endpoints sit inside
 // the walk's horizon — the precondition for resolving it at all. The walk
@@ -204,7 +236,12 @@ export interface ContradictionExposure { rate: number; pairs: number; sources: n
 
 export function contradictionExposure(
   memEdges: MemEdge[],
-  opts: { budget?: number; bridges?: Array<{ a: string; b: string }>; maxSources?: number } = {},
+  opts: {
+    budget?: number;
+    bridges?: Array<{ a: string; b: string }>;            // one fixed set for every source
+    bridgeFor?: (source: string) => Array<{ a: string; b: string }>; // induced per source (shipped path)
+    maxSources?: number;
+  } = {},
 ): ContradictionExposure {
   const budget = Math.max(1, Math.round(opts.budget ?? 6));
   const maxSources = Math.max(1, Math.min(64, Math.round(opts.maxSources ?? 16)));
@@ -213,13 +250,15 @@ export function contradictionExposure(
   const ids = [...new Set(edges.flatMap((e) => [e.src, e.dst]))].sort();
   if (!contras.length || !ids.length) return { rate: 0, pairs: contras.length, sources: 0 };
 
-  const adj = walkAdjacency(edges, opts.bridges);
   const stride = Math.max(1, Math.floor(ids.length / maxSources));
   const sources: string[] = [];
   for (let i = 0; i < ids.length && sources.length < maxSources; i += stride) sources.push(ids[i]);
 
   let total = 0;
   for (const s of sources) {
+    // Per-source bridges when a maker is given, so exposure is measured on the
+    // same deformation a real query would induce.
+    const adj = walkAdjacency(edges, opts.bridgeFor ? opts.bridgeFor(s) : opts.bridges);
     const dist = new Map<string, number>([[s, 0]]);
     const queue = [s];
     let head = 0;
@@ -236,13 +275,25 @@ export function contradictionExposure(
 }
 
 // ── the report: one call, every number the claim needs ────────────────────
+// Measures the SHIPPED configuration — per-query, resonance-scored bridges at
+// the default budget — not the superseded global/product path. If this report
+// and the benchmark ever disagree about what the method is, the report is the
+// one that matters: it is what runs on real data every build.
 
 export interface BridgeReport {
-  mix: Mix;
-  bridges: BridgeSet;
-  traversal: TraversalComparison;
+  scoring: 'product' | 'resonance';
+  count: number;                 // per-query bridge budget
+  mix: Mix;                      // reported for the record; unused under resonance scoring
+  bridges: { total: number; mean_gain: number; mean_fold: number | null };
+  traversal: TraversalComparison & { edges_spent: number };
   contradictions: { baseline: ContradictionExposure; bridged: ContradictionExposure; delta: number };
   budget: number;
+  // The evidence sets are named BY THE MANIFOLD (evidenceQueries), so this
+  // traversal number is a SELF-CONSISTENCY diagnostic — "how far does the raw
+  // topology sit from what the geometry considers near" — not a predictive
+  // result. Predictive validation needs ground truth the geometry did not
+  // choose: see holdout.ts, which uses future co-recall from the event log.
+  circular_evidence: true;
 }
 
 export interface BridgeReportOpts {
@@ -250,7 +301,9 @@ export interface BridgeReportOpts {
   budget?: number;
   k?: number;
   maxQueries?: number;
-  bridge?: Omit<BridgeOpts, 'torusPoints' | 'mix'>;
+  scoring?: 'product' | 'resonance';
+  count?: number;                // per-query bridge budget (defaults to queryBridges' own)
+  bridge?: Omit<BridgeOpts, 'torusPoints' | 'mix' | 'scoring'>;
 }
 
 export function bridgeReport(
@@ -261,20 +314,49 @@ export function bridgeReport(
   const edges = asEdges(memEdges);
   const { mix } = resolveMix({ edges });
   const budget = Math.max(1, Math.round(opts.budget ?? 6));
+  const scoring = opts.scoring ?? 'resonance';
 
-  const bridges = bridgeEdges(hyperPoints, edges, { ...opts.bridge, torusPoints: opts.torusPoints, mix });
+  const bridgeOpts: BridgeOpts & { count?: number; diversify?: boolean; minSep?: number } = {
+    ...opts.bridge,
+    torusPoints: opts.torusPoints,
+    mix,
+    scoring,
+    count: opts.count,
+    diversify: true,
+    minSep: 3,
+  };
+
+  // Cache per source: the traversal and the contradiction pass both induce
+  // bridges for the same nodes, and they must see the SAME deformation.
+  const cache = new Map<string, BridgeEdge[]>();
+  const induce = (source: string): BridgeEdge[] => {
+    let bs = cache.get(source);
+    if (!bs) { bs = queryBridges(source, hyperPoints, edges, bridgeOpts); cache.set(source, bs); }
+    return bs;
+  };
+  const pairs = (source: string) => induce(source).map((b) => ({ a: b.a, b: b.b }));
+
   const queries = evidenceQueries(hyperPoints, { torusPoints: opts.torusPoints, mix, k: opts.k, maxQueries: opts.maxQueries });
-  const traversal = compareTraversal(edges, queries, bridges.bridges, { budget });
+  const traversal = compareTraversalPerQuery(edges, queries, pairs, { budget });
 
   const baseC = contradictionExposure(memEdges, { budget });
-  const bridC = contradictionExposure(memEdges, { budget, bridges: bridges.bridges });
+  const bridC = contradictionExposure(memEdges, { budget, bridgeFor: pairs });
 
+  const all = [...cache.values()].flat();
+  const folds = all.map((b) => b.fold).filter((f): f is number => typeof f === 'number');
   return {
+    scoring,
+    count: all.length && cache.size ? Math.round(all.length / cache.size) : 0,
     mix,
-    bridges,
+    bridges: {
+      total: all.length,
+      mean_gain: all.length ? round(all.reduce((a, b) => a + b.gain, 0) / all.length, 4) : 0,
+      mean_fold: folds.length ? round(folds.reduce((a, b) => a + b, 0) / folds.length, 4) : null,
+    },
     traversal,
     contradictions: { baseline: baseC, bridged: bridC, delta: round(bridC.rate - baseC.rate, 4) },
     budget,
+    circular_evidence: true,
   };
 }
 

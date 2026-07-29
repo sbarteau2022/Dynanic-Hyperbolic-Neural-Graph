@@ -103,7 +103,7 @@ accumulating graph, without ever letting the model touch it:
 
 ## What's built
 
-157 tests, deterministic, zero runtime dependencies (`npm install && npm
+171 tests, deterministic, zero runtime dependencies (`npm install && npm
 test`).
 
 | module | what |
@@ -117,6 +117,7 @@ test`).
 | `src/core/product.ts` | mixed-curvature ℍⁿ×𝕋ᵈ product space — combined distance, curvature-mix resolution, disagreements, exact winding-number recognition invariant vs. asymptotic metric return |
 | `src/core/bridge.ts` | ephemeral wormhole edges — pairs proximal in the product manifold but many hops apart on the raw graph, ranked by hops-saved per geodesic unit |
 | `src/core/metrics.ts` | the bridge benchmark — evidence walk (BFS with hop budget + early stop), baseline-vs-bridged comparison (coverage, effective hops, nodes expanded), contradiction-exposure rate, one-call `bridgeReport` |
+| `src/core/holdout.ts` | the **temporal-holdout** evaluation — split the ledger in time, build the atlas from the past only, and score each arm against the pairs the ledger actually co-recalled afterwards. Ground truth from the log's own future, no planted signal, leakage structurally impossible |
 | `src/core/bench.ts` | the controlled experiment — synthetic corpora with planted topics the embedding never sees, ground-truth recall queries, and control arms (random shortcuts, hub shortcuts, a phase-permutation null) |
 | `src/core/resonance.ts` | **superposition instead of mixture** — phase agreement modulates hyperbolic distance (`d_ℍ · f(r)`) rather than being averaged against it, so a hierarchical graph can keep its depth embedding *and* still route semantically. A routing score, explicitly not a metric |
 | `src/core/events.ts` | folds an append-only event log into edges (φ⁻ⁿ-weighted repeat-occurrence hygiene, capped, order-independent) |
@@ -507,3 +508,68 @@ request: Node 20, `npm install --no-audit --no-fund`, `npm run typecheck`,
 ## License
 
 MIT.
+
+## Does the atlas anticipate recall, or only record it? (`npm run holdout`)
+
+Every result above comes from corpora where the phase signal was planted by
+the same code that later found it. That establishes the mechanism works. It
+cannot establish that a real recall ledger has this structure — and if it
+doesn't, resonance degrades to its permutation null and the whole apparatus is
+a correct instrument with nothing to measure.
+
+`src/core/holdout.ts` removes the synthetic corpus and takes ground truth from
+the ledger's own future:
+
+1. Split the event log **chronologically** at a cut time T (by time quantile,
+   not index — bursty logs would otherwise put wall-clock-adjacent events on
+   opposite sides).
+2. Build the atlas from the **before** half only.
+3. Ground truth = pairs co-recalled **after** T that were **not already
+   adjacent** before T. Re-firing an existing edge is the graph repeating
+   itself, not a prediction, so it does not count.
+4. Ask each arm for k bridges per source; count how many land on those future
+   links.
+
+The answer key lives strictly in the atlas's future, so leakage is
+*structurally* impossible rather than merely avoided. No labels are needed —
+the ledger supplies both the input and the answer.
+
+**Read `phase signal` first.** It reports whether the derived phases carry any
+rhythm at all. If it says `DEGENERATE`, every arm below is measuring nothing.
+Note the null here is **freshly sampled random phases, not a permutation**:
+relabelling which node holds which phase vector leaves the multiset of
+pairwise resonances *exactly* unchanged, so a permutation-based diagnostic
+reports "no structure" even on visibly clustered data. (Permutation remains
+the right null for the *arms*, which tie phase to node identity — that
+correspondence is exactly what it destroys.)
+
+Instrument validation, on a ledger whose rhythm is planted (96 nodes, 1204
+events, phases derived through the real `phases.ts` path from event timing —
+never handed in):
+
+| arm | precision | recall | lift vs random |
+|---|---|---|---|
+| **resonance** | **0.1354** | 0.538 | **6.51×** |
+| product | 0.0729 | 0.346 | 3.50× |
+| resonance, phase-permuted null | 0.0182 | 0.077 | 0.88× |
+| random | 0.0208 | 0.154 | 1.00× |
+| hub | 0.0313 | 0.135 | 1.50× |
+
+The harness detects a strong effect when one exists, and the null collapses to
+chance. It also refuses to manufacture one: on the 6-event example ledger it
+reports `DEGENERATE`, and on a 24-node run where resonance led random by only
+1.10× it reports `INCONCLUSIVE` rather than claiming a win — a method
+proposing k of n nodes scores well by chance on a small graph, and that margin
+is sample size, not evidence.
+
+**This validates the instrument, not the method on real data.** The rhythm
+above was planted. Running
+
+```sh
+npm run sync-events     # pull the real ledger (needs ATLAS_PULL_URL + ATLAS_SERVICE_KEY)
+npm run holdout         # the same experiment, on real recall history
+```
+
+is the measurement that decides whether bridges are worth wiring into
+retrieval. Until it has been run, the synthetic results are a reason to try,
+not a reason to ship.

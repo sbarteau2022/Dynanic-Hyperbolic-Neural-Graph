@@ -112,7 +112,7 @@ describe('THE FIX: resonance survives the topological veto that zeroes the mix',
   });
 
   it('resonance scoring finds topic-mates the topology-mixed metric cannot', () => {
-    const mixed = onTopic({ torusPoints: torus, mix: resolveMix({ edges }).mix, count: 3, minHops: 3, diversify: true });
+    const mixed = onTopic({ torusPoints: torus, scoring: 'product', mix: resolveMix({ edges }).mix, count: 3, minHops: 3, diversify: true });
     const res = onTopic({ torusPoints: torus, scoring: 'resonance', count: 3, minHops: 3, diversify: true });
     expect(res).toBeGreaterThan(3 * mixed);
     expect(res).toBeGreaterThan(0.9 * 72); // near-perfect precision on 24 queries × 3
@@ -132,7 +132,7 @@ describe('THE FIX: resonance survives the topological veto that zeroes the mix',
   it('bridges carry their fold factor under resonance scoring, and not otherwise', () => {
     const res = queryBridges(queries[0].source, hyper, edges, { torusPoints: torus, scoring: 'resonance', count: 2, minHops: 3 });
     expect(res.every((b) => typeof b.fold === 'number' && b.fold! <= 1)).toBe(true);
-    const prod = queryBridges(queries[0].source, hyper, edges, { torusPoints: torus, count: 2, minHops: 3 });
+    const prod = queryBridges(queries[0].source, hyper, edges, { torusPoints: torus, scoring: 'product', count: 2, minHops: 3 });
     expect(prod.every((b) => !('fold' in b))).toBe(true);
   });
 });

@@ -53,8 +53,14 @@ export interface BridgeOpts {
   // so the phase chart is silenced exactly where it is most needed.
   // `resonance` drops the mix entirely and lets phase agreement modulate
   // hyperbolic distance instead (resonance.ts): no weight to infer, no
-  // topological veto. Not a metric — a routing score. Default `product`,
-  // so existing callers are unaffected.
+  // topological veto. Not a metric — a routing score.
+  //
+  // DEFAULT `resonance` whenever torus points are supplied, because that is
+  // what the measurements actually support: 71/72 and 72/72 on-topic against
+  // 58/72 and 63/72 for the best hand-tuned mix, collapsing to 18–23/72 under
+  // the phase-permutation null. Callers that want the metric — the benchmark's
+  // product arms, anything comparing the two — must ask for it by name, so the
+  // shipped path is the measured one rather than the historical one.
   scoring?: 'product' | 'resonance';
   resonance?: ResonantOpts;   // gain / sharpness / floor / transposed
   quantile?: number;     // geo-closeness cut: keep pairs in the closest q of all pair distances (default 0.2)
@@ -100,7 +106,7 @@ function makeGeoDist(
   opts: BridgeOpts,
 ): (a: string, b: string) => number {
   if (!torus) return (a, b) => poincareDist(hyperPoints[a], hyperPoints[b]);
-  if (opts.scoring === 'resonance') {
+  if ((opts.scoring ?? 'resonance') === 'resonance') {
     return (a, b) => resonantDist(
       { ball: hyperPoints[a], torus: torus[a] },
       { ball: hyperPoints[b], torus: torus[b] },
@@ -119,7 +125,7 @@ function makeFold(
   torus: Record<string, number[]> | undefined,
   opts: BridgeOpts,
 ): ((a: string, b: string) => number | undefined) {
-  if (!torus || opts.scoring !== 'resonance') return () => undefined;
+  if (!torus || (opts.scoring ?? 'resonance') !== 'resonance') return () => undefined;
   return (a, b) => foldFactor(torus[a], torus[b], opts.resonance ?? {});
 }
 

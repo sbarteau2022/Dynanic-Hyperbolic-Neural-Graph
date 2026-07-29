@@ -10,7 +10,8 @@
     "publish-atlas": "tsx scripts/publish.ts",
     "sync-events": "tsx scripts/sync-events.ts",
     "bench": "tsx scripts/bench.ts",
-    "bench:hybrid": "tsx scripts/hybrid.ts"
+    "bench:hybrid": "tsx scripts/hybrid.ts",
+    "holdout": "tsx scripts/holdout.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

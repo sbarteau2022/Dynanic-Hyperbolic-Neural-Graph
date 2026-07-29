@@ -95,7 +95,7 @@ describe('the experiment (arms race on identical queries)', () => {
   const queries = groundTruthQueries(corpus.topics, { maxQueries: 24 });
   const hyper = hyperMap([], corpus.edges, { dim: 3, epochs: 300, seed: 42 }).points;
   const torus = torusMap(corpus.nodes.map((id) => ({ id, phases: corpus.phases[id] })), { dim: 8 }).points;
-  const geo = (s: string) => queryBridges(s, hyper, edges, { torusPoints: torus, count: 3, minHops: 3, diversify: true }).map((b) => ({ a: b.a, b: b.b }));
+  const geo = (s: string) => queryBridges(s, hyper, edges, { torusPoints: torus, scoring: 'product', count: 3, minHops: 3, diversify: true }).map((b) => ({ a: b.a, b: b.b }));
 
   it('every arm is scored on the same queries and the same edge budget', () => {
     const arms = runArmsPerQuery(edges, queries, {
@@ -134,7 +134,7 @@ describe('the experiment (arms race on identical queries)', () => {
     const nTorus = torusMap(nulled.nodes.map((id) => ({ id, phases: nulled.phases[id] })), { dim: 8 }).points;
     const onTopic = (pts: Record<string, number[]>, topics: Record<string, string>) =>
       queries.reduce((acc, q) => {
-        const bs = queryBridges(q.source, hyper, edges, { torusPoints: pts, count: 3, minHops: 3, diversify: true });
+        const bs = queryBridges(q.source, hyper, edges, { torusPoints: pts, scoring: 'product', count: 3, minHops: 3, diversify: true });
         return acc + bs.filter((b) => topics[b.a] === topics[b.b]).length;
       }, 0);
     // Same graph, same labels, same embedding — only the phase signal differs.
