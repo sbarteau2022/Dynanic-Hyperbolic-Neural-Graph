@@ -100,7 +100,10 @@ async function main() {
     recovery_rate: recoveryRate(driftSeries),
     stop_loss: verdict,
     bridge: {
-      found: report.bridges.bridges.length,
+      scoring: report.scoring,
+      per_query: report.count,
+      found: report.bridges.total,
+      mean_fold: report.bridges.mean_fold,
       coverage_delta: report.traversal.delta.coverage,
       effective_hops_delta: report.traversal.delta.effective_hops,
       contradiction_delta: report.contradictions.delta,

@@ -37,6 +37,7 @@ import { mulberry32, fnv1a } from './hyper';
 import { norm2pi } from './torus';
 import type { Edge } from './structure';
 import type { MemEdge } from './types';
+import type { MemEvent } from './events';
 import { evidenceWalk, aggregateWalks, type EvidenceQuery, type WalkMetrics } from './metrics';
 
 // ── synthetic corpora with planted topics ─────────────────────────────────
@@ -317,4 +318,64 @@ export function hubQueryBridges(
     .filter((n) => n !== source && !taken.has(ukey(source, n)))
     .slice(0, count)
     .map((n) => ({ a: source, b: n }));
+}
+
+// ── a synthetic LEDGER (events over time), for the holdout experiment ─────
+// The corpora above hand phase vectors straight to the torus. A holdout has
+// to go through the real derivation path instead: phases.ts reads a node's
+// RECALL RHYTHM out of event timestamps, so the signal must be planted as
+// timing, not as a vector.
+//
+// Construction: every node belongs to a topic, and a topic is a CADENCE —
+// all its nodes fire together once per cycle at that topic's offset, so
+// topic-mates share a rhythm and different topics sit at different phases of
+// the same cycle. Graph structure is built by chains that deliberately CROSS
+// topics, so topic-mates are never adjacent in the training graph. After the
+// cut, topic-mates co-recall — the novel links a wormhole claims to foresee.
+export interface LedgerOpts {
+  topics?: number;       // distinct cadences (default 4)
+  perTopic?: number;     // nodes sharing each cadence (default 6)
+  cycles?: number;       // training cycles (default 12 — ~10.7 bins/cycle, near a φ-scale)
+  cycleLen?: number;     // ts units per cycle (default 100)
+  futurePerTopic?: number; // novel topic-mate pairs after the cut (default 4)
+}
+
+export interface Ledger { events: MemEvent[]; topics: Record<string, string>; cut: number }
+
+export function syntheticLedger(opts: LedgerOpts = {}): Ledger {
+  const T = Math.max(2, Math.round(opts.topics ?? 4));
+  const P = Math.max(2, Math.round(opts.perTopic ?? 6));
+  const cycles = Math.max(4, Math.round(opts.cycles ?? 12));
+  const cycleLen = Math.max(10, Math.round(opts.cycleLen ?? 100));
+  const futurePer = Math.max(1, Math.round(opts.futurePerTopic ?? 4));
+
+  const id = (k: number, i: number) => `t${k}_${i}`;
+  const topics: Record<string, string> = {};
+  for (let k = 0; k < T; k++) for (let i = 0; i < P; i++) topics[id(k, i)] = `c${k}`;
+
+  const events: MemEvent[] = [];
+  // Chains run ACROSS topics: chain i links t0_i → t1_i → … so a node's graph
+  // neighbours never share its cadence.
+  for (let cyc = 0; cyc < cycles; cyc++) {
+    for (let k = 0; k < T; k++) {
+      const at = cyc * cycleLen + Math.round((k * cycleLen) / T);   // this topic's offset
+      for (let i = 0; i < P; i++) {
+        const next = id((k + 1) % T, i);
+        if (k + 1 < T) events.push({ kind: 'derived', src: id(k, i), dst: next, weight: 1, ts: at + i });
+        // Chain heads ringed together so the graph is one component.
+        if (k === 0 && i > 0) events.push({ kind: 'assoc', src: id(0, i - 1), dst: id(0, i), weight: 1, ts: at + i });
+      }
+    }
+  }
+
+  const cut = cycles * cycleLen;
+  // After the cut: topic-mates (same cadence, never adjacent) start co-recalling.
+  for (let k = 0; k < T; k++) {
+    for (let n = 0; n < futurePer; n++) {
+      const a = id(k, n % P), b = id(k, (n + 2) % P);
+      if (a === b) continue;
+      events.push({ kind: 'assoc', src: a, dst: b, weight: 1, ts: cut + 10 + n });
+    }
+  }
+  return { events, topics, cut };
 }

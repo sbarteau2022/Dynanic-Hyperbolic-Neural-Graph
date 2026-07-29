@@ -99,13 +99,15 @@ describe('bridgeReport (end-to-end, on a real embedding)', () => {
     expect(r1.traversal.queries).toBeGreaterThan(0);
     expect(r1.traversal.baseline.targets).toBeGreaterThan(0);
     expect(r1.contradictions.baseline.pairs).toBe(1);
+    expect(r1.scoring).toBe('resonance');   // the shipped path, not the superseded one
+    expect(r1.circular_evidence).toBe(true); // labelled, so nobody reads it as predictive
     // The deltas are the deliverable — whatever their sign, they must be there.
     expect(typeof r1.traversal.delta.coverage).toBe('number');
     expect(typeof r1.contradictions.delta).toBe('number');
   });
   it('with the planted atlas, the report shows the bridge paying for itself', () => {
     const r = bridgeReport(planted, mem, { budget: 3, k: 2, maxQueries: 8 });
-    expect(r.bridges.bridges.length).toBeGreaterThan(0);
+    expect(r.bridges.total).toBeGreaterThan(0);
     expect(r.traversal.delta.coverage).toBeGreaterThanOrEqual(0);
     expect(r.contradictions.bridged.rate).toBeGreaterThanOrEqual(r.contradictions.baseline.rate);
   });
