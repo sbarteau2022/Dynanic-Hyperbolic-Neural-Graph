@@ -1,119 +1,263 @@
 # Dynanic-Hyperbolic-Neural-Graph
-Phase State Representation of LLM Relational Coherence-to-Substrate in a Dynamic Hyperbolic Neural Graph representation in 3-Dimensions with replay. As we test for a recovery rate regulating function, stop loss, optimization functions, Secondary optimizations as a biproduct of the first, testing recovery time dynamics.
 
-**Computed outside the LLM. Static functions, on-device, read-only to the model.**
+Phase-state representation of an LLM's relational memory as a dynamic
+hyperbolic neural graph, in 3 dimensions, with replay. The engine builds a
+graph over recalled memory, embeds it in two complementary geometries, tests
+a "wormhole edge" bridging idea against controls, and runs a recovery-rate /
+stop-loss loop across successive builds.
 
-The memory graph and every geometry over it — hyperbolic (Poincaré ball),
+**Computed outside the LLM. Static functions, on-device, read-only to the
+model.** The graph and every geometry over it — hyperbolic (Poincaré ball),
 Lorentz/hyperboloid, and the temporal-coherent evolution across builds — are
-computed by **pure static functions**, with **no LLM anywhere in the
-computation path**. The model gets **read-only view access** to the result:
-it can query the graph's shape and (via the planned 3D viewer) look at it, but
-it can never write an edge, edit a weight, or embed anything into it. That
-boundary is architectural, not a policy — the write path does not exist on
-the model's side. Full spec: [`docs/ATLAS_ENGINE_SPEC.md`](docs/ATLAS_ENGINE_SPEC.md).
+produced by pure, deterministic functions. There is no LLM anywhere in the
+computation path, and no code path in this repo through which a model could
+write an edge, edit a weight, or embed anything into the graph. Full spec:
+[`docs/ATLAS_ENGINE_SPEC.md`](docs/ATLAS_ENGINE_SPEC.md). How this repo fits
+into the wider (three-repository) system — `elle-worker` as the cloud
+boundary and `Elle` as the read-only 3D viewer — is documented in
+[`docs/SYSTEM_ENGINEERING.md`](docs/SYSTEM_ENGINEERING.md); this repository
+is the device engine and is runnable and testable entirely on its own.
 
-## What's built (v0.2 — full geometry stack + the temporal upgrade)
+## Contents
+
+- [What problem this solves](#what-problem-this-solves)
+- [Core concepts](#core-concepts)
+- [What's built](#whats-built)
+- [Tech stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Project structure](#project-structure)
+- [The bridge, made measurable](#the-bridge-made-measurable)
+- [What the benchmark actually found](#what-the-benchmark-actually-found-npm-run-bench)
+- [Superposition: removing the topological veto](#superposition-removing-the-topological-veto)
+- [The recall gap was a budget artifact, not a trade-off](#the-recall-gap-was-a-budget-artifact-not-a-trade-off-npm-run-benchhybrid)
+- [Design decisions of record](#design-decisions-of-record)
+- [CI](#ci)
+- [Roadmap](#roadmap)
+- [References](#references)
+- [License](#license)
+
+## What problem this solves
+
+An LLM-adjacent memory system accumulates recall events ("these memories were
+retrieved together") over time. Two questions this repo answers about that
+accumulating graph, without ever letting the model touch it:
+
+1. **What shape is the memory in, and is it changing in a way that means
+   anything?** A single geometry can't answer this on its own — depth
+   (how derived a memory is from its sources) and phase/recurrence (whether
+   the graph keeps coming back around a regime, or keeps drifting into novel
+   territory) are different axes, and a recovery/stop-loss rule that only
+   watches one of them misses failure modes the other would catch.
+2. **Can structurally-relevant-but-far-apart regions of the graph be found
+   without a longer traversal?** Rather than assert this, the repo measures
+   it directly: it embeds the graph, proposes candidate "wormhole" shortcuts,
+   and runs a breadth-first evidence walk with and without them, compared
+   against cheap alternatives (random and hub shortcuts) and a null control
+   (the same shortcuts with the phase signal permuted away).
+
+## Core concepts
+
+- **Dynamic hyperbolic neural graph** — the memory graph (nodes = memory
+  ids, edges = typed relations folded from recall events) embedded into a
+  Poincaré ball (`src/core/hyper.ts`) via Riemannian SGD. "Dynamic" refers to
+  `src/core/temporal.ts`: instead of re-fitting from scratch on every build,
+  each new build warm-starts from the prior build's coordinates, seats newly
+  born nodes near their already-placed neighbors, and relaxes only the
+  change frontier — so node motion between builds (`atlasDrift`) is a real
+  signal, not re-fit noise.
+- **The Lorentz/hyperboloid chart** (`src/core/lorentz.ts`) — an
+  exact-conversion alternate model of the same hyperbolic space, used as the
+  numerically stable seam for repeated updates (avoids Poincaré
+  boundary blow-up).
+- **The torus chart** (`src/core/torus.ts`) — a flat 𝕋⁸ embedding of
+  *recurrence*: each node's phase signature is read off its own
+  recall-activity rhythm in the event log. This captures something the
+  simply-connected Poincaré ball structurally cannot: whether a node's
+  behavior is cyclical.
+- **The product space** ℍⁿ×𝕋ᵈ (`src/core/product.ts`, after Gu, Sala, Gunel
+  & Ré, ICLR 2019) — combines both charts and, more importantly, surfaces
+  their *disagreements*: pairs close in phase but far in depth (same rhythm,
+  different lineage) vs. close in depth but far in phase (same lineage,
+  drifted phase).
+- **Bridge / wormhole edges** (`src/core/bridge.ts`) — pairs that the
+  product manifold places close together but the raw graph puts several hops
+  apart (or in different components). These are *never written into the
+  graph*; they are returned to the caller for one query and discarded — the
+  graph "folds" momentarily rather than being permanently rewired.
+- **Resonance** (`src/core/resonance.ts`) — a superposition alternative to
+  the product space's convex mix: the ball stays the structural baseline
+  (amplitude) and the torus modulates it (frequency), so phase agreement
+  folds hyperbolic distance instead of competing with it for a mix weight.
+  This is a query-time *routing score*, not a metric — it powers the default
+  scoring path for `queryBridges` (see below), while `productDist` remains
+  the metric of record.
+- **The recovery loop** (`src/core/recovery.ts`) — after a perturbation,
+  drift is expected to decay back toward baseline. `recoveryRate` /
+  `recoveryTime` measure that decay, `regulate` uses recent drift history to
+  choose the next build's anneal (epochs/learning rate), and `stopLoss`
+  detects three concrete failure modes (re-roll, divergence, runaway
+  lineage) and, when triggered, keeps the bad snapshot local instead of
+  publishing it.
+
+## What's built
+
+157 tests, deterministic, zero runtime dependencies (`npm install && npm
+test`).
 
 | module | what |
 |---|---|
 | `src/core/types.ts` | edge kinds + conductance + provenance set |
-| `src/core/hyper.ts` | Poincaré-ball geometry, deterministic encoder, Riemannian-SGD embedding (`hyperMap`) — DERIVATION depth |
-| `src/core/lorentz.ts` | the Lorentz/hyperboloid model — the stability seam for repeated updates (exact Poincaré↔Lorentz conversions, Minkowski distance, exp map) |
-| `src/core/temporal.ts` | temporal-coherent embedding — warm-start + birth-near-neighbors + local relaxation, so the graph *evolves* across replay steps instead of re-rolling each time |
-| `src/core/structure.ts` | the graph's own shape — Betti number b₁, cycle basis, homology class (graph-native recognition invariant), non-bridge/cycle edges, δ-hyperbolicity, curvature signature (what mix of hyperbolic/toroidal a graph actually calls for) |
-| `src/core/torus.ts` | flat-torus 𝕋⁸ phase mapping — RECURRENCE, the thing the ball cannot represent (it's simply connected). Winding numbers, φ-scale weighting, golden low-discrepancy placement, translation alignment, nobility (φ-vs-rational winding) |
-| `src/core/product.ts` | mixed-curvature ℍⁿ×𝕋ᵈ product space (Gu, Sala, Gunel & Ré, ICLR 2019) — combined distance, curvature-mix resolution, the disagreements between the two charts (same-rhythm/different-lineage vs. same-lineage/drifted-phase), and the exact winding-number recognition invariant vs. asymptotic metric return |
-| `src/core/bridge.ts` | ephemeral wormhole edges — pairs proximal in the product manifold but many hops apart (or disconnected) on the raw graph, ranked by hops-saved per geodesic unit. Returned, never written: the graph "folds" for one query and relaxes after |
-| `src/core/metrics.ts` | the benchmark that makes the bridge a claim instead of a metaphor — evidence walk (BFS with hop budget + early stop), geometry-named evidence queries, baseline-vs-bridged comparison (coverage, effective hops, nodes expanded), contradiction-exposure rate, one-call `bridgeReport` |
-| `src/core/bench.ts` | the **controlled experiment** — synthetic corpora with planted topics the embedding never sees, ground-truth recall queries, and the control arms (random shortcuts, hub shortcuts, and a phase-permutation null) the geometry has to beat |
+| `src/core/hyper.ts` | Poincaré-ball geometry, deterministic encoder, Riemannian-SGD embedding (`hyperMap`) — derivation depth |
+| `src/core/lorentz.ts` | the Lorentz/hyperboloid model — exact Poincaré↔Lorentz conversions, Minkowski distance, exp map |
+| `src/core/temporal.ts` | temporal-coherent embedding — warm-start + birth-near-neighbors + local relaxation, so the graph evolves across replay steps instead of re-rolling each time |
+| `src/core/structure.ts` | the graph's own shape — Betti number b₁, cycle basis, homology class, non-bridge/cycle edges (iterative Tarjan), δ-hyperbolicity, curvature signature |
+| `src/core/torus.ts` | flat-torus 𝕋⁸ phase mapping — winding numbers, φ-scale weighting, golden low-discrepancy placement, translation alignment, nobility (φ-vs-rational winding) |
+| `src/core/product.ts` | mixed-curvature ℍⁿ×𝕋ᵈ product space — combined distance, curvature-mix resolution, disagreements, exact winding-number recognition invariant vs. asymptotic metric return |
+| `src/core/bridge.ts` | ephemeral wormhole edges — pairs proximal in the product manifold but many hops apart on the raw graph, ranked by hops-saved per geodesic unit |
+| `src/core/metrics.ts` | the bridge benchmark — evidence walk (BFS with hop budget + early stop), baseline-vs-bridged comparison (coverage, effective hops, nodes expanded), contradiction-exposure rate, one-call `bridgeReport` |
+| `src/core/bench.ts` | the controlled experiment — synthetic corpora with planted topics the embedding never sees, ground-truth recall queries, and control arms (random shortcuts, hub shortcuts, a phase-permutation null) |
 | `src/core/resonance.ts` | **superposition instead of mixture** — phase agreement modulates hyperbolic distance (`d_ℍ · f(r)`) rather than being averaged against it, so a hierarchical graph can keep its depth embedding *and* still route semantically. A routing score, explicitly not a metric |
+| `src/core/events.ts` | folds an append-only event log into edges (φ⁻ⁿ-weighted repeat-occurrence hygiene, capped, order-independent) |
+| `src/core/phases.ts` | reads each node's torus phase signature off its own recall-activity timestamps |
+| `src/core/recovery.ts` | `recoveryRate`, `recoveryTime`, `regulate`, `stopLoss` |
+| `src/cartographer.ts` | `buildAtlas` — the single pure call: events → edges → every geometry core → one bundled atlas |
+| `src/publish.ts` | `serializeAtlas` — canonical (key-sorted) JSON + content hash for a snapshot |
 
-157 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck` / `npm run bench` / `npm run bench:hybrid`.
+## Tech stack
 
-## Why temporal coherence, for this project specifically
+- **Language/runtime:** TypeScript, ESM (`"type": "module"`), executed
+  directly via [`tsx`](https://github.com/privatenumber/tsx) — no build step.
+- **Test runner:** [Vitest](https://vitest.dev/).
+- **Type checking:** `tsc --noEmit`, run against two configs
+  (`tsconfig.json` for `src/`+`test/`, `tsconfig.scripts.json` for
+  `scripts/`, which also needs Node types).
+- **Runtime dependencies:** none. `devDependencies` only —
+  `typescript`, `vitest`, `tsx`, `@types/node`.
+- **CI:** GitHub Actions (`.github/workflows/ci.yml`) — Node 20, `npm
+  install`, `npm run typecheck`, `npm test`, on every push to `main` and
+  every pull request.
 
-A phase-state graph with replay needs positions that *drift*, not *jump* —
-recovery-rate and stop-loss measurements only mean something if a node's
-coordinate motion between replay steps reflects real relational change, not
-embedding noise from a cold re-fit. `temporalHyperMap` gives each node a
-warm-started position (last build's coordinates), seats new nodes near their
-already-placed neighbors instead of teleporting them, and relaxes only the
-change frontier — so the stable interior of the graph pins the gauge and
-`atlasDrift(prior, next)` becomes a real readout: near-zero drift on
-unchanged structure, and (once wired to the recovery-rate work) an actual
-lever to test decay/stop-loss dynamics against.
+## Prerequisites
 
-```ts
-const A1 = hyperMap([], G1);                                 // cold build
-const A2 = temporalHyperMap([], G2, { prior: A1.points });   // evolve from A1
-A2.drift;      // { mean, max, moved } — motion of the stable interior
-A2.new_nodes;  // nodes born this replay step, seated near their neighbors
+- Node.js (CI runs Node 20; any reasonably current Node with native ESM
+  support works for local development).
+- npm (ships with Node).
+
+## Installation
+
+```sh
+git clone https://github.com/sbarteau2022/Dynanic-Hyperbolic-Neural-Graph.git
+cd Dynanic-Hyperbolic-Neural-Graph
+npm install
 ```
 
-## Why both charts, for this project specifically
+## Usage
 
-Depth (hyper.ts) and phase (torus.ts) answer different questions the
-recovery-rate work needs answered separately. Depth says how derived a
-state is from its source; phase says whether the graph is *recurring*
-(coming back around a regime) or *drifting* (novel each time). A stop-loss
-rule that only watched depth would fire on legitimate deep derivation; one
-that only watched phase would miss a state that keeps recurring at greater
-and greater remove from its origin. `disagreements()` is the direct readout
-for that: pairs that are close in phase but far in depth are the same
-rhythm recurring on a longer and longer lineage — exactly the shape a
-runaway (unbounded) recovery loop would take before either optimizer alone
-would flag it.
+```sh
+npm test           # vitest run — 157 tests
+npm run typecheck  # tsc --noEmit against both tsconfig files
+npm run bench      # the controlled bridge-vs-controls experiment (see below)
+npm run bench:hybrid # the exploration/exploitation budget sweep (see below)
+```
 
-## The recovery loop (built)
+### The full device loop
 
-`src/core/recovery.ts` is the layer the intent paragraph at the top of this
-README describes, sitting on the measurement primitives:
+The two remaining scripts talk to a companion `elle-worker` deployment over
+HTTP and are not required to develop or test this repo in isolation — `npm
+test`, `npm run typecheck`, `npm run bench`, and `npm run bench:hybrid` need
+no network access or environment variables at all.
 
-- **`recoveryRate` / `recoveryTime`** — after a perturbation shoves the
-  frontier, drift decays geometrically back to the stable-interior baseline;
-  λ of that decay is the recovery rate, builds-until-rethreshold is the
-  recovery time. A still-growing series reads as a *negative* rate, not as
-  "nothing to measure".
-- **`regulate`** — the recovery-rate regulating function: recent drift
-  history → the next build's relax epochs and learning rate (high drift buys
-  a longer, gentler anneal; a quiet map gets a cheap incremental build).
-  The secondary optimization that falls out of the first as a byproduct.
-- **`stopLoss`** — three triggers, each a real failure mode: *reroll* (drift
-  past the bound — the build re-rolled the map, not evolved it), *diverging*
-  (drift rising across consecutive builds — compounding, not recovering),
-  and *runaway lineage* (a phase-close pair at ever-greater derivational
-  remove — the disagreement shape described above). A triggered stop-loss
-  keeps the snapshot locally and refuses the push: the device holds the
-  loss instead of propagating it to Elle.
+```sh
+export ATLAS_PULL_URL=https://<your-elle-worker-deployment>   # or ATLAS_PUSH_URL for both directions
+export ATLAS_PUSH_URL=$ATLAS_PULL_URL
+export ATLAS_SERVICE_KEY=<the worker's service key>
+
+npm run sync-events     # pull the worker's append-only co-recall ledger → data/events.json
+npm run publish-atlas   # events → regulated build → stop-loss gate → push snapshot to elle-worker
+```
+
+- `sync-events` (`scripts/sync-events.ts`) pages `GET
+  /api/atlas/events?since=<cursor>&limit=500`, appends new events to
+  `data/events.json`, and stores a monotone cursor in `data/cursor.json` so
+  re-running is idempotent.
+- `publish-atlas` (`scripts/publish.ts`) reads `data/events.json` (or the
+  path given by `--in <path>` / `ATLAS_EVENTS_PATH`), warm-starts from
+  `atlas/latest.json` if present, runs `regulate()` on the build history to
+  choose the anneal, builds the atlas, runs `stopLoss`, and — only if a
+  build passes and `ATLAS_PUSH_URL`/`ATLAS_SERVICE_KEY` are set — POSTs the
+  snapshot to `$ATLAS_PUSH_URL/api/atlas/ingest`. It always writes
+  `atlas/<hash>.json`, `atlas/latest.json`, `atlas/history.json`, and
+  `atlas/metrics.json` (the bridge report for that build's real graph)
+  locally regardless of whether the push happens. Exit codes: `0` published
+  (or written locally with push env unset) · `1` no events, or a push/pull
+  failure · `2` stop-loss triggered — snapshot quarantined locally, not
+  pushed.
+- `data/events.json`, `data/cursor.json`, and `atlas/` are gitignored — they
+  are a given machine's local state, not source. `data/events.example.json`
+  shows the event shape (`{kind, src, dst, weight, ts}`) if you want to try
+  `publish-atlas` without a live worker: `npm run publish-atlas -- --in
+  data/events.example.json` builds and writes a snapshot locally (the push
+  step is skipped without `ATLAS_PUSH_URL`/`ATLAS_SERVICE_KEY`).
+
+## Project structure
+
+```
+.
+├── docs/
+│   ├── ATLAS_ENGINE_SPEC.md      # design spec: the read-only invariant, data model, migration plan
+│   └── SYSTEM_ENGINEERING.md     # the full three-repo system as implemented (device + worker + viewer)
+├── data/
+│   └── events.example.json       # sample MemEvent[] for local publish-atlas runs
+├── scripts/
+│   ├── bench.ts                  # CLI: prints the controlled-experiment tables (npm run bench)
+│   ├── hybrid.ts                 # CLI: resonance/random budget sweep (npm run bench:hybrid)
+│   ├── publish.ts                # CLI: events → atlas → stop-loss gate → push (npm run publish-atlas)
+│   └── sync-events.ts            # CLI: pull elle-worker's event ledger (npm run sync-events)
+├── src/
+│   ├── cartographer.ts           # buildAtlas: events → edges → all geometry cores → one atlas
+│   ├── publish.ts                # serializeAtlas: canonical JSON + content hash
+│   └── core/
+│       ├── types.ts              # edge kinds, conductance, provenance
+│       ├── hyper.ts              # Poincaré-ball embedding
+│       ├── lorentz.ts            # Lorentz/hyperboloid model
+│       ├── temporal.ts           # warm-started, drift-tracked embedding
+│       ├── structure.ts          # graph invariants, cycle basis, curvature signature
+│       ├── torus.ts              # flat-torus phase embedding
+│       ├── product.ts            # mixed-curvature product space + disagreements
+│       ├── bridge.ts             # wormhole/bridge edge candidates
+│       ├── metrics.ts            # bridgeReport — the baseline-vs-bridged benchmark
+│       ├── bench.ts              # synthetic corpora + control arms for scripts/bench.ts
+│       ├── resonance.ts          # superposition routing score — phase modulates hyperbolic distance
+│       ├── events.ts             # event log → edges
+│       ├── phases.ts             # event log → per-node torus phase signature
+│       └── recovery.ts           # recoveryRate, recoveryTime, regulate, stopLoss
+├── test/                         # one *.test.ts per src/core module + cartographer/publish
+├── tsconfig.json                 # src/ + test/
+├── tsconfig.scripts.json         # extends tsconfig.json, adds Node types, includes scripts/
+└── package.json
+```
 
 ## The bridge, made measurable
 
-The "Einstein–Rosen bridge" intuition — don't expand node-by-node, deform the
-search space so structurally relevant regions become locally adjacent — is
-implemented and, more importantly, *scored*. `bridgeEdges` (bridge.ts) reads
-candidate wormholes off the atlas: pairs the ℍⁿ×𝕋ᵈ manifold puts close
-together that the raw topology puts ≥ 3 hops apart (or in different
-components), ranked by hops-saved per geodesic unit. They are the actionable
-form of product.ts's *same-rhythm/different-lineage* disagreement, and they
-are ephemeral by construction — returned to the caller, never written into
-the graph, so the manifold "folds" for one query and relaxes after. The
-read-only boundary holds.
+`bridgeEdges` (`bridge.ts`) reads candidate wormholes off the atlas: pairs
+the ℍⁿ×𝕋ᵈ manifold puts close together that the raw topology puts ≥ 3 hops
+apart (or in different components), ranked by hops-saved per geodesic unit.
+They are returned to the caller, never written into the graph.
 
-Whether folding buys anything is not asserted — it is measured. `bridgeReport`
-(metrics.ts) runs the same breadth-first evidence walk twice over the same
-graph, baseline vs. bridged, and reports the deltas on the axes that matter:
+Whether folding buys anything is not asserted — it is measured.
+`bridgeReport` (`metrics.ts`) runs the same breadth-first evidence walk
+twice over the same graph, baseline vs. bridged, and reports the deltas on:
 
 - **evidence coverage** — fraction of the query's evidence set (its k
-  geodesically-nearest nodes — geometry names the evidence, so the walk is
-  judged on reaching what geometry named) inside the hop budget
+  geodesically-nearest nodes) reached inside the hop budget
 - **effective traversal length** — mean hops, with unreached targets charged
   budget + 1 so a miss is a cost, not a silent drop
-- **compute** — nodes expanded before the walk could stop (the deterministic
-  stand-in for latency; there is no wall clock anywhere in this repo)
-- **contradiction exposure** — how often *both* sides of a `contradicts` pair
-  land inside one query's horizon, reached through independent evidence paths
-  (the tension edge itself doesn't count — hopping it from one side resolves
-  nothing)
+- **compute** — nodes expanded before the walk could stop
+- **contradiction exposure** — how often both sides of a `contradicts` pair
+  land inside one query's horizon, reached through independent evidence
+  paths
 
 ```ts
 const atlas = hyperMap([], edges);
@@ -122,26 +266,23 @@ report.traversal.delta;      // { coverage, effective_hops, expanded } — bridg
 report.contradictions.delta; // exposure-rate gain
 ```
 
-If the deltas are ~0 on a given graph, the honest reading is that the graph's
-topology already agrees with its geometry and the bridge has nothing to add
-there — the point of the instrument is that either outcome is a number, not
-an anecdote.
+If the deltas are ~0 on a given graph, the honest reading is that the
+graph's topology already agrees with its geometry and the bridge has
+nothing to add there.
 
-## What the measurement actually found (`npm run bench`)
+## What the benchmark actually found (`npm run bench`)
 
-`bridgeReport` compares bridged against unbridged, but that only shows the
-bridge beating *nothing*. The claim that matters is whether it beats the
-**cheap alternatives**, so `src/core/bench.ts` runs a controlled experiment:
-synthetic corpora where every node carries a planted TOPIC that the embedding
-is never shown, topics manifest only as shared recall PHASE, and the lineage
-edges deliberately cross-cut them — so a node's topic-mates are graph-far and
-phase-close. Ground truth, not geometry, decides what counts as relevant
-(recall over the full planted class), and the geometry arm spends the same
-edge budget from the same source node as three controls: RANDOM shortcuts,
-HUB shortcuts, and a phase-PERMUTATION null.
+`bridgeReport` only shows the bridge beating *nothing*. The claim that
+matters is whether it beats cheap alternatives, so `src/core/bench.ts` runs
+a controlled experiment: synthetic corpora where every node carries a
+planted TOPIC the embedding is never shown, topics manifest only as shared
+recall PHASE, and lineage edges deliberately cross-cut them. Ground truth
+(not geometry) decides what counts as relevant, and the geometry arm spends
+the same edge budget as three controls: RANDOM shortcuts, HUB shortcuts,
+and a phase-PERMUTATION null.
 
 Ring topology (no dominant hub), cross-cutting topics, 3 bridges/query,
-4-hop budget:
+4-hop budget (reproduced by `npm run bench`, deterministic):
 
 | arm | recall | effective hops | bridges on-topic |
 |---|---|---|---|
@@ -154,33 +295,27 @@ Ring topology (no dominant hub), cross-cutting topics, 3 bridges/query,
 Three findings, including one that is not flattering:
 
 1. **The manifold identifies the right pairs.** 63 of 72 query-induced
-   bridges join genuine topic-mates; under the permutation null — same graph,
-   same labels, phase shuffled — that collapses to 18/72. The precision is
-   coming from the signal, not from the act of adding edges.
+   bridges join genuine topic-mates; under the permutation null that
+   collapses to 18/72. The precision comes from the phase signal, not from
+   the act of adding edges.
 2. **It reaches relevant evidence in fewer hops than either control**, and
-   that advantage also vanishes under the null (3.14 → 3.67, which is exactly
-   the hub arm's number). This is the original claim — *fewer hops to
-   relevant evidence* — surviving a real test.
-3. **It does NOT beat random scattering on recall breadth** (0.588 vs 0.639).
-   Three bridges aimed at the nearest topic-mates buy precision; three random
-   shortcuts land in three different regions and sweep up more of the class
-   incidentally. Diversifying bridge selection (`diversify: true`) recovers
-   part of the gap but does not close it. Stated here rather than omitted.
+   that advantage also vanishes under the null (3.14 → 3.67, which is
+   exactly the hub arm's number).
+3. **It does not beat random scattering on recall breadth** (0.588 vs.
+   0.639). Three bridges aimed at the nearest topic-mates buy precision;
+   three random shortcuts land in three different regions and sweep up
+   more of the class incidentally. Diversifying bridge selection
+   (`diversify: true`) recovers part of the gap but does not close it.
 
-Two design decisions came directly out of running this, not out of taste:
+`npm run bench` runs a fuller sweep than the single row above (star vs.
+ring topology, crosscut/aligned/shuffled corpora, and a scope/mix ablation
+table) and prints it directly rather than reproducing it here.
 
-- **Bridges must be query-induced, not global.** One global bridge set for
-  the whole graph lost badly to random rewiring (0.347 vs 0.694 recall in the
-  first run) because eight shortcuts only help queries sitting on their
-  endpoints, while random rewiring shortens the diameter for everyone.
-  `queryBridges` folds the manifold per query — the deformation the
-  architecture actually describes — and that single change moved recall from
-  0.347 to 0.597.
-- **The curvature mix read from topology suppresses the signal.** On a
-  tree-like corpus `curvatureSignature` weights the ball heavily, and the
-  ball cannot see cross-lineage kinship — on-topic bridges drop from 8/8 to
-  2/8 on the star corpus. A mix inferred from topology alone is the wrong
-  prior when the phase chart is carrying the information.
+Caveat: these are synthetic corpora with a planted signal, chosen so
+ground truth exists at all. They establish that the mechanism works and
+beats simpler alternatives on one axis; they do not establish that real
+recall ledgers have this structure. Running the same harness against a
+real event log is the next measurement, not a settled result.
 
 ## Superposition: removing the topological veto
 
@@ -317,42 +452,57 @@ not establish that real recall ledgers have this structure. Running the same
 harness against a real event log is the next measurement, not a settled
 result.
 
-## The full device loop
+## Design decisions of record
 
-```sh
-npm run sync-events     # pull elle-worker's append-only co-recall ledger → data/events.json
-npm run publish-atlas   # events → regulated build → stop-loss gate → push snapshot to elle-worker
-npm run bench           # the controlled experiment (no device state needed)
-```
+- **Bridges must be query-induced, not global.** A single global bridge set
+  for the whole graph lost badly to random rewiring, because a handful of
+  shortcuts only help queries sitting on their endpoints, while random
+  rewiring shortens the diameter for everyone. `queryBridges` folds the
+  manifold per query instead.
+- **The curvature mix read from topology can suppress the signal.** On a
+  tree-like corpus, `curvatureSignature` weights the ball heavily, and the
+  ball alone cannot see cross-lineage kinship. A mix inferred from topology
+  alone is the wrong prior when the phase chart is carrying the
+  information — see the `balanced` mix arm in `scripts/bench.ts`.
+- **Events, not edges, cross into the device.** Recall events are folded
+  into edges on-device (`core/events.ts`) with φ⁻ⁿ repeat-occurrence
+  hygiene, so the graph is always re-derivable from an immutable, append-only
+  event log rather than depending on externally-computed edge weights.
+- **Temporal coherence via warm-start / birth-near-neighbors / frozen
+  interior** (the static analogue of HTGN's principle) was chosen over a
+  trained network, to keep the engine deterministic and model-free.
 
-Every publish also writes `atlas/metrics.json` — the bridge report for that
-build's real graph — and prints the deltas in its summary, so the measurement
-runs on live data on every build rather than only in the benchmark. It is
-written *beside* the snapshot, not into it: the snapshot hash is a
-change-detector for the atlas, and folding a benchmark into it would move the
-hash for reasons that have nothing to do with the map.
+## CI
 
-Both network calls are device-initiated (pull the ledger, push the snapshot);
-the worker never reaches into this machine, and the LLM can only read the
-result. `atlas/history.json` carries the drift series between runs so
-`regulate` and `stopLoss` see the dynamics, not just one build.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull
+request: Node 20, `npm install --no-audit --no-fund`, `npm run typecheck`,
+`npm test`.
 
 ## Roadmap
 
-- **3D viewer with replay:** the Elle workbench renders the latest snapshot
-  (read-only) today; replay across snapshot history — watching a memory
-  drift, split, or be absorbed over time — is the remaining piece.
-- **Feature/phase enrichment:** nodes currently carry no `nodeFeatures`/
-  `nodePhases` through the sync path, so torus placement is golden-lattice
-  for all real nodes until the device computes phases locally.
+- **3D viewer with replay.** The companion `Elle` workbench renders the
+  latest snapshot (read-only) today; replaying across snapshot history —
+  watching a memory drift, split, or be absorbed over time — is the
+  remaining piece, and lives outside this repo.
+- **Feature/phase enrichment.** Nodes currently carry no
+  `nodeFeatures`/`nodePhases` through the sync path, so torus placement
+  falls back to golden-lattice placement for all real nodes until the
+  device computes phases locally from richer signal than event timestamps
+  alone.
 
 ## References
 
-- Nickel & Kiela, *Poincaré Embeddings*, NeurIPS 2017; *Lorentz Model*, ICML 2018.
-- Yang et al., *HTGN*, KDD 2021 — [arXiv:2107.03767](https://arxiv.org/abs/2107.03767).
-- Bai et al., *HGWaveNet*, WWW 2023 — [arXiv:2304.07302](https://arxiv.org/abs/2304.07302).
-- Rossi et al., *Temporal Graph Networks*, 2020 — [arXiv:2006.10637](https://arxiv.org/abs/2006.10637).
-- Gu, Sala, Gunel & Ré, *Mixed-Curvature Representations*, ICLR 2019.
+- Nickel & Kiela, *Poincaré Embeddings for Learning Hierarchical
+  Representations*, NeurIPS 2017; *Learning Continuous Hierarchies in the
+  Lorentz Model*, ICML 2018.
+- Yang et al., *Hyperbolic Temporal Graph Network (HTGN)*, KDD 2021 —
+  [arXiv:2107.03767](https://arxiv.org/abs/2107.03767).
+- Bai et al., *HGWaveNet*, WWW 2023 —
+  [arXiv:2304.07302](https://arxiv.org/abs/2304.07302).
+- Rossi et al., *Temporal Graph Networks*, 2020 —
+  [arXiv:2006.10637](https://arxiv.org/abs/2006.10637).
+- Gu, Sala, Gunel & Ré, *Learning Mixed-Curvature Representations in
+  Product Spaces*, ICLR 2019.
 
 ## License
 
