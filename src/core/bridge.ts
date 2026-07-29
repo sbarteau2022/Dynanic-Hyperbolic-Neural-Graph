@@ -206,7 +206,15 @@ export function queryBridges(
   edges: Edge[],
   opts: BridgeOpts & { count?: number; diversify?: boolean; minSep?: number } = {},
 ): BridgeEdge[] {
-  const count = Math.max(1, Math.min(32, Math.round(opts.count ?? 3)));
+  // Default 6, set from the measured crossover rather than by taste. Below 4
+  // bridges per query, random scattering beats resonance on recall breadth
+  // (three bridges can only reach three of a topic's members directly, so luck
+  // competes); at 4 the ordering inverts on BOTH recall and hops, and past it
+  // the advantage widens rather than saturating — 0.889/1.73 at 6 against
+  // 0.796/2.85 for random, on both topologies. 6 sits clear of the crossover
+  // with headroom, and is where `npm run bench:hybrid` shows the Pareto
+  // frontier collapsing to a single all-resonance point.
+  const count = Math.max(1, Math.min(32, Math.round(opts.count ?? 6)));
   const minHops = Math.max(2, Math.round(opts.minHops ?? 3));
   const minSep = Math.max(1, Math.round(opts.minSep ?? 3));
   const torus = opts.torusPoints;

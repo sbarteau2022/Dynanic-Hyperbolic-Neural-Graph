@@ -84,3 +84,25 @@ describe('THE HYBRID IS REFUTED at a sufficient budget', () => {
     });
   }
 });
+
+describe('the shipped default sits above the crossover', () => {
+  it('queryBridges defaults to 6 bridges per query', () => {
+    const corpus = syntheticCorpus({ topology: 'ring', alignment: 'crosscut', lineages: 6, perLineage: 6, topics: 4, seed: 1 });
+    const edges = asEdges(corpus.edges);
+    const hyper = hyperMap([], corpus.edges, { dim: 3, epochs: 300, seed: 42 }).points;
+    const torus = torusMap(corpus.nodes.map((id) => ({ id, phases: corpus.phases[id] })), { dim: 8 }).points;
+    const source = groundTruthQueries(corpus.topics, { maxQueries: 24 })[0].source;
+    // No `count` passed — the default is what is under test.
+    const def = queryBridges(source, hyper, edges, { torusPoints: torus, scoring: 'resonance', minHops: 3, diversify: true, minSep: 3 });
+    expect(def.length).toBe(6);
+  });
+
+  it('and the default beats the same budget spent on random shortcuts, on both axes', () => {
+    for (const topology of ['star', 'ring'] as const) {
+      const h = harness(topology);
+      const res = h.run(6, 0), rnd = h.run(6, 6);
+      expect(res.coverage).toBeGreaterThan(rnd.coverage);
+      expect(res.effective_hops).toBeLessThan(rnd.effective_hops);
+    }
+  });
+});

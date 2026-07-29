@@ -28,7 +28,7 @@ the model's side. Full spec: [`docs/ATLAS_ENGINE_SPEC.md`](docs/ATLAS_ENGINE_SPE
 | `src/core/bench.ts` | the **controlled experiment** — synthetic corpora with planted topics the embedding never sees, ground-truth recall queries, and the control arms (random shortcuts, hub shortcuts, and a phase-permutation null) the geometry has to beat |
 | `src/core/resonance.ts` | **superposition instead of mixture** — phase agreement modulates hyperbolic distance (`d_ℍ · f(r)`) rather than being averaged against it, so a hierarchical graph can keep its depth embedding *and* still route semantically. A routing score, explicitly not a metric |
 
-155 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck` / `npm run bench` / `npm run bench:hybrid`.
+157 tests, deterministic, zero runtime dependencies. `npm install && npm test` / `npm run typecheck` / `npm run bench` / `npm run bench:hybrid`.
 
 ## Why temporal coherence, for this project specifically
 
@@ -296,6 +296,14 @@ never actually coupled.
 budget on exploration, spend a large enough budget.** Mixing in random
 shortcuts is strictly dominated at any budget where the method is worth using
 at all.
+
+`queryBridges` therefore **defaults to 6 bridges per query** — set from this
+crossover, not from taste: clear of the inversion at 4, with headroom, and at
+the point where the allocation sweep's Pareto frontier collapses to a single
+all-resonance point. The benchmark tables above deliberately stay at 3, one
+edge *below* the crossover, because that is the setting most favourable to the
+controls: the shipped configuration should not be the one the comparison is
+run at.
 
 One honest note on the null: inside a hybrid, recall is unchanged when phases
 are shuffled (0.866 signal vs 0.866 null on star) while hops degrade
